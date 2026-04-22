@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Launch cortex (TUI or -p one-shot) with the local Ollama proxy.
+#
+# If the proxy is already listening on :2031, reuse it.
+# Otherwise start it in the background, wait for it to be ready, launch
+# cortex in the foreground, and tear the proxy down again on exit.
+#
+# Two modes, chosen by whether CORTEX_SQL_CONNECTION is set:
+#   fully-local  (unset): agent and SQL both proxy-stubbed, no Snowflake contact.
+#   hybrid       (set):   agent via proxy → Ollama, SQL tools → real Snowflake
+#                         account named in CORTEX_SQL_CONNECTION.
+
+set -uo pipefail
+
+export CORTEX_AGENT_USE_LOCAL_ORCHESTRATOR=1
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+export CORTEX_AGENT_CONNECTION="${CORTEX_AGENT_CONNECTION:-ollama}"
+
+PROXY_HTTP_PORT="${CORTEX_PROXY_HTTP_PORT:-2031}"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+CORTEX_BIN="${CORTEX_BIN:-$(command -v cortex 2>/dev/null || echo "$HOME/.local/bin/cortex")}"
+
+if [[ ! -x "$CORTEX_BIN" ]]; then
+  echo "cortex-ollama: cannot find the cortex binary. Set CORTEX_BIN." >&2
+  exit 1
+fi
+
+healthz() { curl -sfo /dev/null --max-time 1 "http://127.0.0.1:${PROXY_HTTP_PORT}/healthz"; }
+
+PROXY_PID=""
+cleanup() {
+  if [[ -n "$PROXY_PID" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
+    echo
+    echo "cortex-ollama: stopping proxy (pid $PROXY_PID)..."
+    # pixi spawns python, which spawns uvicorn — send SIGTERM to the whole group
+    kill "$PROXY_PID" 2>/dev/null || true
+    # Belt-and-suspenders: make sure uvicorn processes rooted at our dir die too
+    pkill -f "python -m proxy" 2>/dev/null || true
+    wait "$PROXY_PID" 2>/dev/null || true
+  fi
+}
+
+if healthz; then
+  echo "cortex-ollama: proxy already running on :${PROXY_HTTP_PORT} — reusing it."
+else
+  echo "cortex-ollama: starting proxy..."
+  ( cd "$REPO_DIR" && exec pixi run serve >/tmp/cortex-ollama-proxy.log 2>&1 ) &
+  PROXY_PID=$!
+  trap cleanup EXIT INT TERM HUP
+
+  # Wait up to 30 s for the proxy to answer healthz.
+  for i in $(seq 1 30); do
+    if healthz; then
+      echo "cortex-ollama: proxy ready (pid $PROXY_PID, log /tmp/cortex-ollama-proxy.log)"
+      break
+    fi
+    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+      echo "cortex-ollama: proxy exited before becoming ready. See /tmp/cortex-ollama-proxy.log" >&2
+      tail -30 /tmp/cortex-ollama-proxy.log >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+  if ! healthz; then
+    echo "cortex-ollama: proxy did not become ready within 30s. See /tmp/cortex-ollama-proxy.log" >&2
+    tail -30 /tmp/cortex-ollama-proxy.log >&2 || true
+    exit 1
+  fi
+fi
+
+if [[ -n "${CORTEX_SQL_CONNECTION:-}" ]]; then
+  echo "cortex-ollama: hybrid mode — agent=${CORTEX_AGENT_CONNECTION}, sql=${CORTEX_SQL_CONNECTION}"
+else
+  echo "cortex-ollama: fully-local mode (set CORTEX_SQL_CONNECTION for hybrid)"
+fi
+
+# If we didn't start the proxy, we can exec (no cleanup owed).
+# If we did start it, run cortex as a child so the EXIT trap still fires.
+if [[ -z "$PROXY_PID" ]]; then
+  exec "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "$@"
+else
+  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "$@"
+fi

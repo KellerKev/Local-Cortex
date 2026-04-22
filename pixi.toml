@@ -1,0 +1,26 @@
+[project]
+name = "cortex_ollama"
+version = "0.1.0"
+description = "Proxy that emulates Snowflake Cortex agent:run so Cortex Code CLI can be driven by a local Ollama server."
+authors = ["kevin"]
+channels = ["conda-forge"]
+platforms = ["osx-arm64"]
+
+[dependencies]
+python = "3.12.*"
+uvicorn = ">=0.30"
+fastapi = ">=0.115"
+httpx = ">=0.27"
+pydantic = ">=2.7"
+
+[tasks]
+capture = "uvicorn proxy.capture:app --host 127.0.0.1 --port 2031 --log-level info"
+serve = "python -m proxy"
+gen-cert = """
+mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout certs/localhost.key -out certs/localhost.crt \
+  -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+"""
+probe = "python -m proxy.probe"
+cortex = "bin/cortex-ollama"
+tui = "bin/cortex-ollama"

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Pixi (environment cache — recreated by `pixi install`)
+.pixi/
+
+# Request captures contain real Snowflake auth tokens from dev sessions.
+# Never commit these.
+captures/
+
+# TLS key material. Regenerate with `pixi run gen-cert`.
+certs/*.key
+certs/*.crt
+
+# Local logs / debug dumps
+*.log
+/tmp/cortex_ollama_*.json
+
+# Editor / OS crud
+.DS_Store
+.idea/
+.vscode/
+*.swp
