@@ -36,7 +36,7 @@ logger = logging.getLogger("cortex_ollama")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3-coder:30b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b-a3b")
 # Native Ollama chat path — /v1/chat/completions drops per-model tool-call
 # parsing for families like Qwen, producing raw text like "<function=read>…"
 # instead of structured tool_calls. /api/chat does the parsing correctly.

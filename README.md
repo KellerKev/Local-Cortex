@@ -144,7 +144,7 @@ route to a real Snowflake account.
 | var                      | default                  | meaning                                    |
 |--------------------------|--------------------------|--------------------------------------------|
 | `OLLAMA_BASE_URL`        | `http://127.0.0.1:11434` | Ollama server                              |
-| `OLLAMA_MODEL`           | `qwen3-coder:30b`        | model name passed to Ollama                |
+| `OLLAMA_MODEL`           | `qwen3.6:35b-a3b`        | model name passed to Ollama                |
 | `CORTEX_AGENT_CONNECTION`| `ollama`                 | connection used for the agent loop (stay on the proxy) |
 | `CORTEX_SQL_CONNECTION`  | unset                    | connection used for SQL tools (set for hybrid mode)   |
 | `CORTEX_PROXY_HTTP_PORT` | `2031`                   | plaintext listener (agent:run) port        |
