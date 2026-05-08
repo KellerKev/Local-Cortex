@@ -105,11 +105,17 @@ route to a real Snowflake account.
    [connections.sf-real]          # add this — real account, real PAT
    account = "YOUR_ACCOUNT_ID"
    user = "your-username"
-   authenticator = "PROGRAMMATIC_ACCESS_TOKEN"
    password = "<paste your PAT here>"
    role = "ACCOUNTADMIN"          # or whatever your PAT permits
    warehouse = "COMPUTE_WH"
    ```
+
+   *Note*: leave the `authenticator` line **off**. Some Snowflake accounts
+   reject PATs when authenticator is set explicitly to
+   `PROGRAMMATIC_ACCESS_TOKEN`, but accept the same token as a regular
+   password (auto-detected). The fully-local `[connections.ollama]` above
+   keeps the explicit authenticator because our HTTPS stub relies on the
+   declared PAT path to skip browser auth.
 
 2. Start the proxy with the SQL connection name available:
 

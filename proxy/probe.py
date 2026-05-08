@@ -131,6 +131,18 @@ ANCHORS: list[Anchor] = [
         description="Field name in the agent:run body; used in our translator",
         pattern=r"account_url",
     ),
+    Anchor(
+        name="sql_execute_tool_name",
+        required=True,
+        description="SQL execution tool name (Cortex renamed snowflake_sql_execute → sql_execute in 1.0.73+; either is fine — we route on both)",
+        pattern=r'name:"(?:snowflake_)?sql_execute",',
+    ),
+    Anchor(
+        name="sql_execute_connection_param",
+        required=True,
+        description="`connection` parameter on sql_execute — what we inject for hybrid-mode SQL routing",
+        pattern=r'connection:\{type:"string",description:"Optional connection name',
+    ),
 ]
 
 

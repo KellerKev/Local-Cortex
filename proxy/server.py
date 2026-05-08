@@ -50,16 +50,23 @@ OLLAMA_CHAT_PATH = "/api/chat"
 # suspenders in case the model forgets and Cortex would otherwise fall back
 # to the agent connection (our stub, which returns no rows).
 SQL_CONNECTION_NAME = os.environ.get("CORTEX_SQL_CONNECTION", "").strip()
-AGENT_CONNECTION_NAME = os.environ.get("CORTEX_AGENT_CONNECTION", "").strip()
+# Default to "ollama" so the safety-net override fires even when the proxy
+# was launched without inheriting the wrapper's CORTEX_AGENT_CONNECTION.
+# Only the wrapper sets this; pixi-run-serve in another shell typically does not.
+AGENT_CONNECTION_NAME = os.environ.get("CORTEX_AGENT_CONNECTION", "ollama").strip() or "ollama"
 
 # Snowflake-family tools whose input_schema carries an optional `connection:`
-# parameter. See proxy/probe.py — if a Cortex update changes the accepted
-# parameter name, the probe's anchor list should catch it.
+# parameter. Both old (snowflake_sql_execute, Cortex 1.0.48) and new
+# (sql_execute, Cortex 1.0.73+) names are recognized — Cortex renamed and
+# generalized the tool to also support Postgres in 1.0.73.
 SNOWFLAKE_ROUTED_TOOLS = frozenset(
     {
+        "sql_execute",
         "snowflake_sql_execute",
         "snowflake_object_search",
         "snowflake_product_docs",
+        "snowflake_table_lookup",
+        "snowflake_multi_cortex_analyst",
         "semantic_view_search",
     }
 )

@@ -165,14 +165,54 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         },
     },
     "snowflake_sql_execute": {
-        "description": "Execute a Snowflake SQL statement on the active connection.",
+        # Cortex 1.0.48 name. Kept for backward-compat. Cortex 1.0.73+ uses
+        # the shorter `sql_execute` (renamed when Postgres support was added).
+        "description": "Execute a Snowflake SQL statement. Returns rows in a structured format.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "sql": {"type": "string"},
-                "connection": {"type": "string"},
+                "sql": {
+                    "type": "string",
+                    "description": "The SQL query or queries to execute. Multiple statements separated by semicolons.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "User-facing summary of what this query does, under 30 words.",
+                },
+                "connection": {
+                    "type": "string",
+                    "description": "Optional connection name. If not specified, uses the currently active SQL connection.",
+                },
+                "timeout_seconds": {"type": "number"},
+                "only_compile": {"type": "boolean"},
             },
-            "required": ["sql"],
+            "required": ["sql", "description"],
+        },
+    },
+    "sql_execute": {
+        # Cortex 1.0.73+ name. Same wire shape as snowflake_sql_execute, but
+        # also accepts Postgres connections. Required-fields list matches the
+        # live binary (sql + description) so the model fills both.
+        "description": "Execute SQL queries against the active SQL connection. Supports Snowflake and Postgres targets.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "The SQL query or queries to execute. Multiple statements separated by semicolons.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "User-facing summary of what this query does, under 30 words.",
+                },
+                "connection": {
+                    "type": "string",
+                    "description": "Optional connection name. If not specified, uses the currently active SQL connection.",
+                },
+                "timeout_seconds": {"type": "number"},
+                "only_compile": {"type": "boolean"},
+            },
+            "required": ["sql", "description"],
         },
     },
     "fdbt": {
