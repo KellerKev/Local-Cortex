@@ -87,13 +87,17 @@ pick_model_interactive() {
 REQUESTED_MODEL=""
 PICK=0
 PASSTHRU=()
+# We deliberately do NOT special-case `--` here. `pixi run tui -- --pick`
+# delivers `-- --pick` to this wrapper; if we treated `--` as "stop parsing,
+# pass the rest verbatim", `--pick` would go to cortex (which doesn't know
+# it). Instead, our wrapper flags are recognized anywhere on the line, and
+# everything else (including a literal `--`) is forwarded to cortex.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model|-M) REQUESTED_MODEL="${2:-}"; shift 2 ;;
     --pick|-P) PICK=1; shift ;;
     --list-models) list_ollama_models; exit 0 ;;
-    --help|-h) usage; exit 0 ;;
-    --) shift; PASSTHRU+=("$@"); break ;;
+    -h) usage; exit 0 ;;  # short -h is ours; --help is forwarded to cortex
     *) PASSTHRU+=("$1"); shift ;;
   esac
 done
