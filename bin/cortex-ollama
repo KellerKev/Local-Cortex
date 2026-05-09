@@ -64,6 +64,8 @@ fi
 healthz() { curl -sfo /dev/null --max-time 1 "http://127.0.0.1:${PROXY_HTTP_PORT}/healthz"; }
 
 PROXY_PID=""
+SETTINGS_FILE="$HOME/.snowflake/cortex/settings.json"
+SETTINGS_BACKUP=""
 cleanup() {
   if [[ -n "$PROXY_PID" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
     echo
@@ -72,7 +74,65 @@ cleanup() {
     pkill -f "python -m proxy" 2>/dev/null || true
     wait "$PROXY_PID" 2>/dev/null || true
   fi
+  # Restore the user's persistent settings file
+  if [[ -n "$SETTINGS_BACKUP" ]] && [[ -f "$SETTINGS_BACKUP" ]]; then
+    mv "$SETTINGS_BACKUP" "$SETTINGS_FILE" 2>/dev/null || rm -f "$SETTINGS_BACKUP"
+  fi
 }
+trap cleanup EXIT INT TERM HUP
+
+# Cortex 1.0.73's --config flag does NOT override settings for the keys we
+# care about (sqlConnectionName, cortexAgentConnectionName) in the TUI header
+# — they're read straight from ~/.snowflake/cortex/settings.json. Patch the
+# user's file in place and restore on exit so concurrent sessions don't
+# clobber each other's persistent prefs.
+patch_settings() {
+  mkdir -p "$(dirname "$SETTINGS_FILE")"
+  if [[ -f "$SETTINGS_FILE" ]]; then
+    SETTINGS_BACKUP=$(mktemp -t cortex-ollama-settings.XXXXXX) || return 1
+    cp "$SETTINGS_FILE" "$SETTINGS_BACKUP"
+  else
+    SETTINGS_BACKUP=$(mktemp -t cortex-ollama-settings.XXXXXX) || return 1
+    : > "$SETTINGS_BACKUP"  # marker for "no original existed"
+  fi
+  CORTEX_AGENT_CONNECTION="$CORTEX_AGENT_CONNECTION" \
+  CORTEX_SQL_CONNECTION="${CORTEX_SQL_CONNECTION:-}" \
+  SETTINGS_FILE="$SETTINGS_FILE" \
+  python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path(os.environ["SETTINGS_FILE"])
+data = {}
+if p.exists():
+    try: data = json.loads(p.read_text())
+    except Exception: data = {}
+data["cortexAgentConnectionName"] = os.environ["CORTEX_AGENT_CONNECTION"]
+sql = os.environ.get("CORTEX_SQL_CONNECTION", "").strip()
+if sql:
+    data["sqlConnectionName"] = sql
+elif "sqlConnectionName" in data:
+    del data["sqlConnectionName"]
+p.write_text(json.dumps(data, indent=2))
+PY
+}
+patch_settings || { echo "cortex-ollama: failed to patch settings.json" >&2; exit 1; }
+
+# Symlink the repo's slash commands into Cortex's global commands dir so
+# /local-model and /local-models are discoverable inside the TUI. Idempotent.
+install_slash_commands() {
+  local src="$REPO_DIR/commands" dst="$HOME/.snowflake/cortex/commands"
+  [[ -d "$src" ]] || return 0
+  mkdir -p "$dst"
+  for f in "$src"/*.md; do
+    [[ -f "$f" ]] || continue
+    local name target
+    name=$(basename "$f")
+    target="$dst/$name"
+    if [[ ! -L "$target" ]] || [[ "$(readlink "$target")" != "$f" ]]; then
+      ln -sf "$f" "$target"
+    fi
+  done
+}
+install_slash_commands
 
 if healthz; then
   echo "cortex-ollama: proxy already running on :${PROXY_HTTP_PORT} — reusing it."
@@ -97,7 +157,6 @@ else
   fi
   ( cd "$REPO_DIR" && exec pixi run serve >/tmp/cortex-ollama-proxy.log 2>&1 ) &
   PROXY_PID=$!
-  trap cleanup EXIT INT TERM HUP
 
   for i in $(seq 1 30); do
     if healthz; then
@@ -121,14 +180,24 @@ fi
 ACTIVE_MODEL=$(curl -sS "http://127.0.0.1:${PROXY_HTTP_PORT}/healthz" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin).get("model",""))' 2>/dev/null)
 
+AVAILABLE_MODELS=$(curl -sS --max-time 2 "${OLLAMA_URL}/api/tags" 2>/dev/null \
+  | python3 -c 'import sys,json
+try: ms = json.load(sys.stdin).get("models", [])
+except Exception: ms = []
+print(", ".join(sorted(m["name"] for m in ms)))' 2>/dev/null || echo "")
+
 if [[ -n "${CORTEX_SQL_CONNECTION:-}" ]]; then
   echo "cortex-ollama: hybrid mode — agent=${CORTEX_AGENT_CONNECTION}, sql=${CORTEX_SQL_CONNECTION}, model=${ACTIVE_MODEL}"
 else
   echo "cortex-ollama: fully-local mode — model=${ACTIVE_MODEL}"
 fi
+if [[ -n "$AVAILABLE_MODELS" ]]; then
+  echo "cortex-ollama: ollama has [${AVAILABLE_MODELS}] — pass --model NAME to switch."
+fi
 
 if [[ -z "$PROXY_PID" ]]; then
-  exec "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
+  # We can't `exec` here because we need the EXIT trap to restore settings.json.
+  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
 else
   "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
 fi
