@@ -128,7 +128,7 @@ else
 fi
 
 if [[ -z "$PROXY_PID" ]]; then
-  exec "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "${PASSTHRU[@]}"
+  exec "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
 else
-  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "${PASSTHRU[@]}"
+  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
 fi
