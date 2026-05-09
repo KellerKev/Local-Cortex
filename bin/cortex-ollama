@@ -19,6 +19,42 @@ export CORTEX_AGENT_CONNECTION="${CORTEX_AGENT_CONNECTION:-ollama}"
 PROXY_HTTP_PORT="${CORTEX_PROXY_HTTP_PORT:-2031}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CORTEX_BIN="${CORTEX_BIN:-$(command -v cortex 2>/dev/null || echo "$HOME/.local/bin/cortex")}"
+OLLAMA_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+
+usage() {
+  cat <<USAGE
+Usage: cortex-ollama [--model NAME] [--list-models] [-- <cortex args>]
+
+Options:
+  --model, -M NAME    Use this Ollama model. If the proxy is already up,
+                      hot-swaps via POST /model. Otherwise sets OLLAMA_MODEL
+                      for the proxy we're about to start.
+  --list-models       Print models available in Ollama and exit.
+  --help, -h          Show this help.
+
+Anything after -- (or unrecognised flags) is passed straight through to cortex.
+
+Environment:
+  OLLAMA_MODEL              Default model when starting the proxy.
+  CORTEX_SQL_CONNECTION     Real Snowflake connection name (enables hybrid mode).
+  CORTEX_AGENT_CONNECTION   Connection cortex uses for auth/agent (default: ollama).
+USAGE
+}
+
+REQUESTED_MODEL=""
+PASSTHRU=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --model|-M) REQUESTED_MODEL="${2:-}"; shift 2 ;;
+    --list-models)
+      curl -sS "${OLLAMA_URL}/api/tags" \
+        | python3 -c 'import sys,json; [print(m["name"]) for m in json.load(sys.stdin).get("models",[])]'
+      exit 0 ;;
+    --help|-h) usage; exit 0 ;;
+    --) shift; PASSTHRU+=("$@"); break ;;
+    *) PASSTHRU+=("$1"); shift ;;
+  esac
+done
 
 if [[ ! -x "$CORTEX_BIN" ]]; then
   echo "cortex-ollama: cannot find the cortex binary. Set CORTEX_BIN." >&2
@@ -32,9 +68,7 @@ cleanup() {
   if [[ -n "$PROXY_PID" ]] && kill -0 "$PROXY_PID" 2>/dev/null; then
     echo
     echo "cortex-ollama: stopping proxy (pid $PROXY_PID)..."
-    # pixi spawns python, which spawns uvicorn — send SIGTERM to the whole group
     kill "$PROXY_PID" 2>/dev/null || true
-    # Belt-and-suspenders: make sure uvicorn processes rooted at our dir die too
     pkill -f "python -m proxy" 2>/dev/null || true
     wait "$PROXY_PID" 2>/dev/null || true
   fi
@@ -42,13 +76,29 @@ cleanup() {
 
 if healthz; then
   echo "cortex-ollama: proxy already running on :${PROXY_HTTP_PORT} — reusing it."
+  if [[ -n "$REQUESTED_MODEL" ]]; then
+    RESP=$(curl -sS -X POST -H 'Content-Type: application/json' \
+      -d "{\"model\":\"${REQUESTED_MODEL}\"}" \
+      "http://127.0.0.1:${PROXY_HTTP_PORT}/model")
+    if echo "$RESP" | grep -q '"ok": true\|"ok":true'; then
+      echo "cortex-ollama: model swapped → ${REQUESTED_MODEL}"
+    else
+      echo "cortex-ollama: model swap FAILED:" >&2
+      echo "$RESP" >&2
+      exit 1
+    fi
+  fi
 else
-  echo "cortex-ollama: starting proxy..."
+  if [[ -n "$REQUESTED_MODEL" ]]; then
+    export OLLAMA_MODEL="$REQUESTED_MODEL"
+    echo "cortex-ollama: starting proxy with OLLAMA_MODEL=${REQUESTED_MODEL}..."
+  else
+    echo "cortex-ollama: starting proxy..."
+  fi
   ( cd "$REPO_DIR" && exec pixi run serve >/tmp/cortex-ollama-proxy.log 2>&1 ) &
   PROXY_PID=$!
   trap cleanup EXIT INT TERM HUP
 
-  # Wait up to 30 s for the proxy to answer healthz.
   for i in $(seq 1 30); do
     if healthz; then
       echo "cortex-ollama: proxy ready (pid $PROXY_PID, log /tmp/cortex-ollama-proxy.log)"
@@ -68,16 +118,17 @@ else
   fi
 fi
 
+ACTIVE_MODEL=$(curl -sS "http://127.0.0.1:${PROXY_HTTP_PORT}/healthz" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin).get("model",""))' 2>/dev/null)
+
 if [[ -n "${CORTEX_SQL_CONNECTION:-}" ]]; then
-  echo "cortex-ollama: hybrid mode — agent=${CORTEX_AGENT_CONNECTION}, sql=${CORTEX_SQL_CONNECTION}"
+  echo "cortex-ollama: hybrid mode — agent=${CORTEX_AGENT_CONNECTION}, sql=${CORTEX_SQL_CONNECTION}, model=${ACTIVE_MODEL}"
 else
-  echo "cortex-ollama: fully-local mode (set CORTEX_SQL_CONNECTION for hybrid)"
+  echo "cortex-ollama: fully-local mode — model=${ACTIVE_MODEL}"
 fi
 
-# If we didn't start the proxy, we can exec (no cleanup owed).
-# If we did start it, run cortex as a child so the EXIT trap still fires.
 if [[ -z "$PROXY_PID" ]]; then
-  exec "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "$@"
+  exec "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "${PASSTHRU[@]}"
 else
-  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "$@"
+  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update "${PASSTHRU[@]}"
 fi

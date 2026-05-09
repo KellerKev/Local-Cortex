@@ -80,6 +80,39 @@ pixi run cortex -- -p "explain this repo"
 pixi run cortex --                 # interactive session
 ```
 
+### Switching local models
+
+Three ways, increasing in scope of effect.
+
+```bash
+# 1. One-shot: which models do I have?
+pixi run cortex -- --list-models
+
+# 2. Per-launch: pin a model for this run only.
+pixi run cortex -- --model devstral-small-2:latest -p "review my diff"
+
+# 3. Hot-swap on a running proxy without restarting cortex.
+#    --model flag against an already-running proxy POSTs /model and the swap
+#    takes effect on the very next agent turn.
+pixi run cortex -- --model gemma3:27b
+```
+
+Behind the scenes there's a tiny REST surface on the proxy:
+
+```bash
+curl http://127.0.0.1:2031/healthz   # current model + ollama URL + timestamp
+curl http://127.0.0.1:2031/models    # current, default, and available list
+curl -X POST http://127.0.0.1:2031/model \
+     -H 'Content-Type: application/json' \
+     -d '{"model": "qwen3-coder:30b"}'
+```
+
+The proxy validates against `ollama list` before accepting; an unknown name
+returns 400 with the available models so a misspelling never silently fails.
+On proxy restart the active model resets to `OLLAMA_MODEL` (or the built-in
+default). To make a change permanent, set `OLLAMA_MODEL` in the shell that
+launches `pixi run serve`.
+
 ## Hybrid mode: local AI + real Snowflake for SQL
 
 Cortex internally separates its **agent connection** (inference) from its

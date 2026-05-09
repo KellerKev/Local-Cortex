@@ -37,6 +37,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b-a3b")
+# Live, mutable copy that `/model` POST updates and that every agent:run
+# reads. Lets users hot-swap models without restarting the proxy.
+_current_model = OLLAMA_MODEL
 # Native Ollama chat path — /v1/chat/completions drops per-model tool-call
 # parsing for families like Qwen, producing raw text like "<function=read>…"
 # instead of structured tool_calls. /api/chat does the parsing correctly.
@@ -358,7 +361,7 @@ async def _stream_from_ollama(
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
 
     payload: dict[str, Any] = {
-        "model": OLLAMA_MODEL,
+        "model": _current_model,
         "messages": _translate_messages_to_ollama(messages),
         "stream": True,
     }
@@ -601,7 +604,7 @@ async def agent_run(request: Request):
 
     logger.info(
         "agent-run: model=%s msgs=%d tools=%d",
-        OLLAMA_MODEL,
+        _current_model,
         len(openai_messages),
         len(openai_tools),
     )
@@ -615,7 +618,74 @@ async def agent_run(request: Request):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "ollama": OLLAMA_BASE_URL, "model": OLLAMA_MODEL, "ts": time.time()}
+    return {"ok": True, "ollama": OLLAMA_BASE_URL, "model": _current_model, "ts": time.time()}
+
+
+@app.get("/model")
+async def get_model():
+    """Return the model the proxy is currently sending to Ollama."""
+    return {"model": _current_model, "default": OLLAMA_MODEL}
+
+
+@app.post("/model")
+async def set_model(request: Request):
+    """Hot-swap the active model. Validates against `ollama list` before accepting.
+
+    Body: ``{"model": "<name:tag>"}``. Persists for the life of the process; on
+    restart, the proxy falls back to ``OLLAMA_MODEL`` from the env (or its
+    built-in default).
+    """
+    global _current_model
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_json"})
+    new = (body.get("model") or "").strip()
+    if not new:
+        return JSONResponse(status_code=400, content={"error": "missing 'model' field"})
+
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+            r.raise_for_status()
+            available = [m.get("name") for m in r.json().get("models", [])]
+    except Exception as e:
+        return JSONResponse(
+            status_code=502,
+            content={"error": f"could not reach Ollama: {e}"},
+        )
+
+    if new not in available:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"model {new!r} not in `ollama list`",
+                "available": available,
+            },
+        )
+
+    previous = _current_model
+    _current_model = new
+    logger.info("model swapped: %s → %s", previous, new)
+    return {"ok": True, "previous": previous, "model": _current_model}
+
+
+@app.get("/models")
+async def list_models():
+    """Convenience: proxy `ollama list` so callers don't need a second client."""
+    timeout = httpx.Timeout(10.0, connect=5.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return JSONResponse(
+            status_code=502, content={"error": f"could not reach Ollama: {e}"}
+        )
+    names = sorted(m.get("name", "") for m in data.get("models", []))
+    return {"current": _current_model, "default": OLLAMA_MODEL, "available": names}
 
 
 # ---------------------------------------------------------------------------
