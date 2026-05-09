@@ -23,12 +23,14 @@ OLLAMA_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 
 usage() {
   cat <<USAGE
-Usage: cortex-ollama [--model NAME] [--list-models] [-- <cortex args>]
+Usage: cortex-ollama [--model NAME] [--pick] [--list-models] [-- <cortex args>]
 
 Options:
-  --model, -M NAME    Use this Ollama model. If the proxy is already up,
-                      hot-swaps via POST /model. Otherwise sets OLLAMA_MODEL
-                      for the proxy we're about to start.
+  --model, -M NAME    Use this Ollama model. Hot-swaps a running proxy via
+                      POST /model, or sets OLLAMA_MODEL for the proxy we're
+                      about to start.
+  --pick, -P          Interactive model picker. Shows the locally-installed
+                      Ollama models and lets you choose by number.
   --list-models       Print models available in Ollama and exit.
   --help, -h          Show this help.
 
@@ -41,20 +43,60 @@ Environment:
 USAGE
 }
 
+list_ollama_models() {
+  curl -sS --max-time 5 "${OLLAMA_URL}/api/tags" 2>/dev/null \
+    | python3 -c 'import sys,json
+try: ms = json.load(sys.stdin).get("models", [])
+except Exception: ms = []
+[print(m["name"]) for m in sorted(ms, key=lambda m: m["name"])]'
+}
+
+pick_model_interactive() {
+  local models choice
+  mapfile -t models < <(list_ollama_models)
+  if [[ ${#models[@]} -eq 0 ]]; then
+    echo "cortex-ollama: no models in \`ollama list\` — install one with \`ollama pull <name>\`" >&2
+    return 1
+  fi
+  if [[ ${#models[@]} -eq 1 ]]; then
+    REQUESTED_MODEL="${models[0]}"
+    echo "cortex-ollama: only one model available — using ${REQUESTED_MODEL}"
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "cortex-ollama: --pick needs an interactive terminal" >&2
+    return 1
+  fi
+  echo
+  echo "Locally-installed Ollama models:"
+  PS3="Pick a model number (or Enter to cancel): "
+  select choice in "${models[@]}"; do
+    if [[ -n "$choice" ]]; then
+      REQUESTED_MODEL="$choice"
+      echo "cortex-ollama: selected ${REQUESTED_MODEL}"
+      return 0
+    fi
+    return 1
+  done
+}
+
 REQUESTED_MODEL=""
+PICK=0
 PASSTHRU=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model|-M) REQUESTED_MODEL="${2:-}"; shift 2 ;;
-    --list-models)
-      curl -sS "${OLLAMA_URL}/api/tags" \
-        | python3 -c 'import sys,json; [print(m["name"]) for m in json.load(sys.stdin).get("models",[])]'
-      exit 0 ;;
+    --pick|-P) PICK=1; shift ;;
+    --list-models) list_ollama_models; exit 0 ;;
     --help|-h) usage; exit 0 ;;
     --) shift; PASSTHRU+=("$@"); break ;;
     *) PASSTHRU+=("$1"); shift ;;
   esac
 done
+
+if [[ $PICK -eq 1 ]]; then
+  pick_model_interactive || { echo "cortex-ollama: model selection cancelled" >&2; exit 1; }
+fi
 
 if [[ ! -x "$CORTEX_BIN" ]]; then
   echo "cortex-ollama: cannot find the cortex binary. Set CORTEX_BIN." >&2
@@ -195,9 +237,15 @@ if [[ -n "$AVAILABLE_MODELS" ]]; then
   echo "cortex-ollama: ollama has [${AVAILABLE_MODELS}] — pass --model NAME to switch."
 fi
 
-if [[ -z "$PROXY_PID" ]]; then
-  # We can't `exec` here because we need the EXIT trap to restore settings.json.
-  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
-else
-  "$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" --no-auto-update ${PASSTHRU[@]+"${PASSTHRU[@]}"}
+# Pass the active local model through Cortex's -m flag so the TUI header
+# shows the actual Ollama model instead of "auto". Cortex's model selection
+# is otherwise a no-op for us — our proxy intercepts every agent turn and
+# sends `_current_model` to Ollama regardless of what -m says.
+MODEL_FLAG=()
+if [[ -n "$ACTIVE_MODEL" ]]; then
+  MODEL_FLAG=(-m "$ACTIVE_MODEL")
 fi
+
+# We can't `exec` here because we need the EXIT trap to restore settings.json.
+"$CORTEX_BIN" -c "$CORTEX_AGENT_CONNECTION" "${MODEL_FLAG[@]}" --no-auto-update \
+  ${PASSTHRU[@]+"${PASSTHRU[@]}"}
