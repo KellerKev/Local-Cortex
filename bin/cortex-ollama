@@ -52,8 +52,12 @@ except Exception: ms = []
 }
 
 pick_model_interactive() {
-  local models choice
-  mapfile -t models < <(list_ollama_models)
+  # Read into array portably — macOS bash 3.2 has no mapfile.
+  local choice line
+  local -a models=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && models+=("$line")
+  done < <(list_ollama_models)
   if [[ ${#models[@]} -eq 0 ]]; then
     echo "cortex-ollama: no models in \`ollama list\` — install one with \`ollama pull <name>\`" >&2
     return 1
