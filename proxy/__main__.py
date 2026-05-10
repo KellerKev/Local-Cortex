@@ -34,8 +34,10 @@ async def _serve() -> None:
             )
         print()
 
-    http_port = int(os.environ.get("CORTEX_PROXY_HTTP_PORT", "2031"))
-    https_port = int(os.environ.get("CORTEX_PROXY_HTTPS_PORT", "2443"))
+    # server.CONFIG is the resolved config (file + env). Use it for ports.
+    from .server import CONFIG
+    http_port = CONFIG.http_port
+    https_port = CONFIG.https_port
     host = os.environ.get("CORTEX_PROXY_HOST", "127.0.0.1")
 
     http_cfg = uvicorn.Config(

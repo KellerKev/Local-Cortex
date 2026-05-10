@@ -1,0 +1,57 @@
+# cortex_ollama proxy configuration.
+#
+# Copy to one of (first found wins):
+#   ./cortex_ollama.toml                          (project-local)
+#   ~/.config/cortex-ollama/config.toml           (per-user)
+# or set CORTEX_OLLAMA_CONFIG=/path/to/file.toml.
+#
+# Anything you don't set here uses the built-in defaults. Env vars still
+# override the file (handy for one-shot experiments).
+
+# ---------------------------------------------------------------------------
+# Inference backend — which model server gets the agent traffic.
+# Pick one: "ollama" (default), "openai" (or any OpenAI-compatible vendor),
+# or "anthropic".
+# ---------------------------------------------------------------------------
+backend = "ollama"
+
+[backends.ollama]
+base_url = "http://127.0.0.1:11434"
+model    = "qwen3.6:35b-a3b"
+
+[backends.openai]
+# Works with OpenAI itself and any /v1/chat/completions-compatible API
+# (xAI Grok, Groq, OpenRouter, Together, vLLM, llama.cpp server, etc.).
+base_url = "https://api.openai.com/v1"
+api_key  = ""          # or set OPENAI_API_KEY in env
+model    = "gpt-4o"
+
+[backends.anthropic]
+base_url = "https://api.anthropic.com/v1"
+api_key  = ""          # or set ANTHROPIC_API_KEY in env
+model    = "claude-sonnet-4-5"
+# Anthropic API version pin
+api_version = "2023-06-01"
+
+# ---------------------------------------------------------------------------
+# Snowflake connection wiring (the credential blocks themselves still live in
+# ~/.snowflake/config.toml — that's where the cortex CLI reads them).
+# ---------------------------------------------------------------------------
+[snowflake]
+# Connection cortex authenticates with. Keep this pointing at the local
+# proxy stub (default name "ollama") for browser-free auth.
+agent_connection = "ollama"
+
+# Connection used by the sql_execute tool. Empty = fully-local mode (SQL
+# tools hit the stub and return no rows). Set to a real connection name
+# from ~/.snowflake/config.toml to route SQL at a real account.
+sql_connection = ""    # e.g. "streamgen", "sfse-na"
+
+# ---------------------------------------------------------------------------
+# Proxy listeners. Change if 2031/2443 collide with something else; if you
+# move 2031, also export the new value as CORTEX_PROXY_HTTP_PORT so the
+# wrapper's healthz check finds it.
+# ---------------------------------------------------------------------------
+[proxy]
+http_port  = 2031
+https_port = 2443

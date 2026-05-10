@@ -1,53 +1,70 @@
 # cortex_ollama
 
-Run Snowflake **Cortex Code CLI** entirely against a local **Ollama** server —
-no Snowflake account, no browser auth, no network calls to `snowflakecomputing.com`.
+Run Snowflake **Cortex Code CLI** against any LLM backend — local **Ollama**,
+**OpenAI** (or any OpenAI-compat provider), or **Anthropic** — without ever
+touching `snowflakecomputing.com` for inference. SQL tools can either be
+stubbed (fully-local) or routed at a real Snowflake account (hybrid).
 
 ## How it works
 
 Two undocumented Cortex hooks do all the heavy lifting:
 
 1. `CORTEX_AGENT_USE_LOCAL_ORCHESTRATOR=1` forces Cortex's agent loop to
-   `http://localhost:2031/v1/agent-run`. This is a test path Snowflake left in
-   the binary; we implement it, translating the Snowflake-shaped agent:run
-   request to Ollama's `/api/chat` and streaming the reply back as the
-   Anthropic-style SSE events (`content_block_start` → `message.delta` →
-   `message.stop` → `[DONE]`) Cortex parses.
-2. A fake `ollama` connection in `~/.snowflake/config.toml` with
-   `authenticator = "PROGRAMMATIC_ACCESS_TOKEN"` points Cortex's Node SDK at
-   `https://localhost:2443`. The proxy serves a minimal
-   `/session/v1/login-request` stub so the SDK thinks auth succeeded, plus
-   small stubs for heartbeat, token-refresh, queries, and telemetry.
+   `http://localhost:2031/v1/agent-run`. We implement that endpoint and
+   stream the reply back as the Anthropic-style SSE events Cortex parses.
+2. A fake `ollama` connection in `~/.snowflake/config.toml` points Cortex's
+   Node SDK at `https://localhost:2443`. The proxy serves a minimal stub for
+   `/session/v1/login-request` and friends so the SDK thinks auth succeeded.
 
 With those in place, Cortex starts up, authenticates against the proxy, and
-routes every agent turn to Ollama — no real Snowflake ever touched.
+routes every agent turn to whichever backend you've configured.
 
 ## Features
 
-- **Text chat** — streams Ollama tokens back as `message.delta` text deltas.
-- **Tool calling** — `read`, `write`, `edit`, `bash`, `grep`, `glob`, `web_fetch`,
-  and all of Cortex's client-MCP tools (task, team, cron). Covers both
-  structured tool_calls (when Ollama emits them) and qwen-style
-  `<function=...>…</function>` text fallback — the proxy detects and rewrites
-  either form into proper `tool_use` events.
-- **Tool-result round-trip** — Cortex executes the tool client-side and
-  replays the result as an assistant→tool message pair; the translator maps
-  Cortex's nested `tool_use.*` / `tool_result.*` shapes to OpenAI chat
-  `{role:"tool"}` messages.
-- **Thinking-block stripping** — `<think>…</think>` content from Qwen/DeepSeek
+- **Pluggable backends** — `ollama` (local, default), `openai`
+  (covers OpenAI itself plus xAI/Groq/OpenRouter/Together/vLLM/llama.cpp via
+  their OpenAI-compat endpoints), and `anthropic` (Messages API). Hot-swap
+  any of them without restarting the proxy via `POST /backend`.
+- **Tool calling round-trip** — `read`, `write`, `edit`, `bash`, `grep`,
+  `glob`, `web_fetch`, and all of Cortex's client-MCP tools (task, team,
+  cron). Translator handles structured tool_calls *and* qwen-style
+  `<function=...>` text fallback; the result round-trip maps Cortex's nested
+  `tool_use.*` / `tool_result.*` shapes to OpenAI / Anthropic message shapes.
+- **Hybrid mode** — set `sql_connection` and the `sql_execute` tool routes to
+  a real Snowflake account (via Cortex's native `sqlConnectionName`), with a
+  proxy-side safety net that pins `connection:` on every Snowflake-family
+  tool call.
+- **Thinking-block stripping** — `<think>…</think>` from Qwen/DeepSeek
   reasoning models is hidden from the user-visible output.
-- **Update-robustness probe** — scans the installed Cortex binary for 15
-  anchor strings the proxy depends on. Runs automatically at server startup
-  and aborts if any required anchor has been renamed in a Cortex update.
+- **Update-robustness probe** — scans the installed Cortex binary for the
+  protocol anchors the translator depends on. Runs at server startup and
+  aborts if a Cortex update has renamed something we rely on.
+- **Single TOML config** — `cortex_ollama.toml` holds backend creds, ports,
+  and Snowflake routing in one place. Env vars still override per-launch.
 
 ## First-time setup
 
 ```bash
 pixi run gen-cert          # self-signed cert for localhost HTTPS listener
 pixi install               # installs the python env (~40 MB)
+
+# Optional: copy the sample proxy config and edit it.
+cp cortex_ollama.toml.example cortex_ollama.toml
+$EDITOR cortex_ollama.toml
 ```
 
-Add the ollama connection to `~/.snowflake/config.toml`:
+The proxy looks for its config at, in order:
+
+1. `$CORTEX_OLLAMA_CONFIG` (explicit path)
+2. `./cortex_ollama.toml` (project-local)
+3. `~/.config/cortex-ollama/config.toml` (per-user)
+
+If none exists, built-in defaults kick in (Ollama on `localhost:11434`,
+fully-local SQL).
+
+Then add the `ollama` connection to `~/.snowflake/config.toml` (this is where
+the Snowflake Node SDK reads connection blocks from — that location is fixed
+by Cortex itself):
 
 ```toml
 [connections.ollama]
@@ -80,34 +97,67 @@ pixi run cortex -- -p "explain this repo"
 pixi run cortex --                 # interactive session
 ```
 
-### Switching local models
+### Choosing a backend
 
-One knob: the `OLLAMA_MODEL` environment variable.
+Edit `cortex_ollama.toml`:
 
-```bash
-# What's installed?
-pixi run cortex -- --list-models
+```toml
+backend = "ollama"   # or "openai", "anthropic"
 
-# Pin a model for this run.
-OLLAMA_MODEL=devstral-small-2:latest pixi run tui
+[backends.ollama]
+base_url = "http://127.0.0.1:11434"
+model    = "qwen3.6:35b-a3b"
 
-# Pin a model for this shell session.
-export OLLAMA_MODEL=qwen3.6:35b-a3b
-pixi run tui
+[backends.openai]
+base_url = "https://api.openai.com/v1"   # or any OpenAI-compatible endpoint
+api_key  = "sk-..."                       # or set OPENAI_API_KEY in env
+model    = "gpt-4o"
+
+[backends.anthropic]
+base_url = "https://api.anthropic.com/v1"
+api_key  = "sk-ant-..."                   # or set ANTHROPIC_API_KEY in env
+model    = "claude-sonnet-4-5"
 ```
 
-Mid-session, without exiting the TUI, run the bundled slash command
-`/local-models` — it prints the curl recipe to swap on the live proxy. The
-swap takes effect on the very next agent turn.
-
-The proxy also exposes a small REST surface for scripts:
+Switch at runtime without restarting the proxy:
 
 ```bash
-curl http://127.0.0.1:2031/healthz   # current model + ollama URL + timestamp
-curl http://127.0.0.1:2031/models    # current, default, and available list
+curl -X POST http://127.0.0.1:2031/backend \
+     -H 'Content-Type: application/json' \
+     -d '{"backend": "anthropic"}'
+# next agent turn goes to Anthropic
+```
+
+### Switching models within a backend
+
+```bash
+# Cold start with a specific model
+OLLAMA_MODEL=devstral-small-2:latest pixi run tui
+
+# Permanent: edit cortex_ollama.toml and restart, or:
+export OLLAMA_MODEL=qwen3.6:35b-a3b
+
+# What's installed locally?
+pixi run cortex -- --list-models     # ollama backend only
+
+# Mid-session swap (works for any backend)
 curl -X POST http://127.0.0.1:2031/model \
      -H 'Content-Type: application/json' \
      -d '{"model": "qwen3-coder:30b"}'
+```
+
+Inside the TUI, the bundled `/local-models` slash command prints the swap
+recipe so you don't have to leave the session.
+
+### REST surface
+
+```bash
+GET  /healthz   # backend, base_url, model, timestamp
+GET  /models    # backend's available model list
+GET  /model     # current model + configured default
+POST /model     # body: {"model": "..."}    — hot-swap model on current backend
+GET  /backend   # current backend + configured ones
+POST /backend   # body: {"backend": "anthropic", "model": "..."}  — hot-swap backend
 ```
 
 The proxy validates against `ollama list` before accepting; an unknown name

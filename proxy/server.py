@@ -1,19 +1,23 @@
-"""Cortex Code ↔ Ollama translator.
+"""Cortex Code ↔ pluggable LLM backend translator.
 
 Implements the endpoint Cortex Code hits when
-`CORTEX_AGENT_USE_LOCAL_ORCHESTRATOR=1` is set:
+``CORTEX_AGENT_USE_LOCAL_ORCHESTRATOR=1`` is set:
 
     POST http://localhost:2031/v1/agent-run
 
-Cortex sends a Snowflake-flavored agent:run request (JSON; its `messages` /
-`tools` / `experimental` fields are themselves JSON strings). We:
+Cortex sends a Snowflake-flavored agent:run request (JSON; its ``messages`` /
+``tools`` / ``experimental`` fields are themselves JSON strings). We:
 
  1. translate messages from Cortex/Anthropic shape → OpenAI chat shape,
     including tool_use ↔ tool_call / tool_result ↔ tool role round-trips;
- 2. call Ollama's OpenAI-compatible /v1/chat/completions with streaming;
+ 2. forward to the configured backend (Ollama, OpenAI/compat, or Anthropic)
+    via the abstraction in :mod:`proxy.backends`;
  3. stream the response back as the Anthropic-style SSE events Cortex
-    understands (message.delta text deltas, message.stop with optional
-    tool_use content, `[DONE]`).
+    understands (response.text.delta, message.stop with optional tool_use,
+    ``[DONE]``).
+
+The active backend, model, and Snowflake routing all come from
+:mod:`proxy.config` (cortex_ollama.toml + env-var overrides).
 """
 
 from __future__ import annotations
@@ -29,34 +33,53 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from . import config as proxy_config
+from .backends import (
+    Backend,
+    BackendEvent,
+    DoneEvent,
+    TextDeltaEvent,
+    ToolUseEvent,
+    get_backend,
+)
 from .snowflake_stubs import router as snowflake_router
 from .toolspecs import to_openai_tools
 
 logger = logging.getLogger("cortex_ollama")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b-a3b")
-# Live, mutable copy that `/model` POST updates and that every agent:run
-# reads. Lets users hot-swap models without restarting the proxy.
-_current_model = OLLAMA_MODEL
-# Native Ollama chat path — /v1/chat/completions drops per-model tool-call
-# parsing for families like Qwen, producing raw text like "<function=read>…"
-# instead of structured tool_calls. /api/chat does the parsing correctly.
-OLLAMA_CHAT_PATH = "/api/chat"
+CONFIG = proxy_config.load()
+if CONFIG.source:
+    logger.info("config loaded from %s", CONFIG.source)
+else:
+    logger.info("no cortex_ollama.toml found; using built-in defaults + env")
+
+# Mutable per-process state — what every agent:run reads. /backend and /model
+# endpoints can swap these at runtime without a proxy restart.
+_state = {
+    "backend_name": CONFIG.backend.name,
+    "backend": get_backend(
+        CONFIG.backend.name,
+        CONFIG.backend.base_url,
+        CONFIG.backend.model,
+        CONFIG.backend.api_key,
+        CONFIG.backend.api_version,
+    ),
+}
+
+
+def _active_backend() -> Backend:
+    return _state["backend"]
+
 
 # Hybrid mode: Cortex natively supports a split between agent-connection (for
-# inference) and sql-connection (for database queries). We read the SQL
-# connection name from the same env var Cortex itself uses so the two paths
-# stay consistent. When set, the proxy also injects `connection:` into any
-# Snowflake-family tool_use that the model emits without one — belt-and-
-# suspenders in case the model forgets and Cortex would otherwise fall back
-# to the agent connection (our stub, which returns no rows).
-SQL_CONNECTION_NAME = os.environ.get("CORTEX_SQL_CONNECTION", "").strip()
-# Default to "ollama" so the safety-net override fires even when the proxy
-# was launched without inheriting the wrapper's CORTEX_AGENT_CONNECTION.
-# Only the wrapper sets this; pixi-run-serve in another shell typically does not.
-AGENT_CONNECTION_NAME = os.environ.get("CORTEX_AGENT_CONNECTION", "ollama").strip() or "ollama"
+# inference) and sql-connection (for database queries). When SQL_CONNECTION_NAME
+# is set the proxy injects ``connection:`` into any Snowflake-family tool_use
+# the model emits without one — belt-and-suspenders against the model
+# forgetting (Cortex would otherwise fall back to the agent connection, which
+# is our stub).
+SQL_CONNECTION_NAME = CONFIG.sql_connection
+AGENT_CONNECTION_NAME = CONFIG.agent_connection or "ollama"
 
 # Snowflake-family tools whose input_schema carries an optional `connection:`
 # parameter. Both old (snowflake_sql_execute, Cortex 1.0.48) and new
@@ -313,185 +336,103 @@ def _strip_think(delta: str, in_block: bool, carry: str) -> tuple[str, bool, str
 # ---------------------------------------------------------------------------
 
 
-def _translate_messages_to_ollama(openai_messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Adjust OpenAI-shape messages to Ollama's /api/chat shape.
-
-    Differences:
-    - Ollama's tool role uses a plain {role:"tool", content:"..."} — no tool_call_id
-      field needed (it matches by position/name), but including it is harmless.
-    - assistant tool_calls expect arguments as an OBJECT, not a JSON string.
-    """
-    out: list[dict[str, Any]] = []
-    for m in openai_messages:
-        if m.get("role") == "assistant" and m.get("tool_calls"):
-            new = {"role": "assistant", "content": m.get("content") or ""}
-            new_calls = []
-            for tc in m["tool_calls"]:
-                fn = tc.get("function") or {}
-                args_val = fn.get("arguments", "{}")
-                if isinstance(args_val, str):
-                    try:
-                        args_val = json.loads(args_val)
-                    except json.JSONDecodeError:
-                        args_val = {"_raw": args_val}
-                new_calls.append(
-                    {
-                        "function": {
-                            "name": fn.get("name", ""),
-                            "arguments": args_val,
-                        }
-                    }
-                )
-            new["tool_calls"] = new_calls
-            out.append(new)
-        else:
-            out.append(m)
-    return out
-
-
-async def _stream_from_ollama(
+async def _stream_from_backend(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
 ) -> AsyncIterator[bytes]:
-    """Call Ollama /api/chat with streaming and yield Cortex-shaped SSE frames.
+    """Run a turn through the active backend; emit Cortex-shaped SSE.
 
-    Text tokens stream as message.delta events; any tool_calls are buffered
-    and emitted in a final message.stop with tool_use content parts.
+    Text tokens stream out as ``response.text.delta`` events; any tool_calls
+    are buffered (and the safety-net pinned to the SQL connection if hybrid
+    mode is on), then emitted as a single ``message.stop`` carrying
+    ``tool_use`` content blocks.
     """
+    backend = _active_backend()
     message_id = f"msg_{uuid.uuid4().hex[:12]}"
-
-    payload: dict[str, Any] = {
-        "model": _current_model,
-        "messages": _translate_messages_to_ollama(messages),
-        "stream": True,
-    }
-    if tools:
-        payload["tools"] = tools
 
     if os.environ.get("CORTEX_OLLAMA_DEBUG"):
         debug_path = f"/tmp/cortex_ollama_debug_{int(time.time())}.json"
         with open(debug_path, "w") as fh:
-            json.dump(payload, fh, indent=2, default=str)
+            json.dump(
+                {"backend": backend.name, "model": backend.model, "messages": messages, "tools": tools},
+                fh, indent=2, default=str,
+            )
         logger.info("debug payload written to %s", debug_path)
 
     accumulated_text = ""
     pending_stream_text = ""  # buffered text not yet flushed to SSE
-    text_already_sent = 0  # chars already streamed via message.delta
+    text_already_sent = 0  # chars already streamed via response.text.delta
     tool_uses: list[dict[str, Any]] = []
     text_block_opened = False
     in_think_block = False
     carry = ""
-    finish_reason: str | None = None
+    finish_reason = "stop"
+    backend_error = ""
 
-    timeout = httpx.Timeout(300.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream(
-            "POST",
-            f"{OLLAMA_BASE_URL}{OLLAMA_CHAT_PATH}",
-            json=payload,
-        ) as resp:
-            if resp.status_code != 200:
-                err = (await resp.aread()).decode(errors="replace")
-                logger.error("Ollama %s: %s", resp.status_code, err[:400])
-                yield _sse(
-                    "message.delta",
-                    {
-                        "delta": {
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": f"[proxy error from Ollama {resp.status_code}: {err[:300]}]",
-                                }
-                            ]
-                        }
-                    },
-                )
-                yield _sse(
-                    "message.stop",
-                    {
-                        "message": {
-                            "id": message_id,
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": ""}],
-                            "stop_reason": "end_turn",
-                        }
-                    },
-                )
-                yield _sse_done()
-                return
-
-            async for line in resp.aiter_lines():
-                line = line.strip()
-                if not line:
+    async for ev in backend.stream(messages, tools):
+        if isinstance(ev, TextDeltaEvent):
+            visible, in_think_block, carry = _strip_think(
+                ev.text, in_think_block, carry
+            )
+            if not visible:
+                continue
+            pending_stream_text += visible
+            # Hold back any text that might be the start of a tool-call tag
+            # ("<function" / "<tool_call") so we don't leak partial markup.
+            safe_upto = len(pending_stream_text)
+            for marker in ("<function", "<tool_call"):
+                idx = pending_stream_text.find("<", text_already_sent)
+                if idx == -1:
                     continue
-                try:
-                    chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                msg = chunk.get("message") or {}
-
-                # Text delta
-                delta_text = msg.get("content", "")
-                if delta_text:
-                    visible, in_think_block, carry = _strip_think(
-                        delta_text, in_think_block, carry
+                suffix = pending_stream_text[idx:]
+                if marker.startswith(suffix) or suffix.startswith(marker):
+                    safe_upto = min(safe_upto, idx)
+            to_send = pending_stream_text[text_already_sent:safe_upto]
+            if to_send:
+                if not text_block_opened:
+                    yield _sse(
+                        "content_block_start",
+                        {"index": 0, "content_block": {"type": "text", "text": ""}},
                     )
-                    if visible:
-                        pending_stream_text += visible
-                        # Only flush the text *before* any half-started "<function" /
-                        # "<tool_call" tag. If a tag is in progress we must wait to
-                        # see if it's a real tool call (and therefore shouldn't be
-                        # streamed to the user) or just prose containing "<".
-                        safe_upto = len(pending_stream_text)
-                        for marker in ("<function", "<tool_call"):
-                            idx = pending_stream_text.find("<", text_already_sent)
-                            if idx == -1:
-                                continue
-                            suffix = pending_stream_text[idx:]
-                            if marker.startswith(suffix) or suffix.startswith(marker):
-                                safe_upto = min(safe_upto, idx)
-                        to_send = pending_stream_text[text_already_sent:safe_upto]
-                        if to_send:
-                            if not text_block_opened:
-                                yield _sse(
-                                    "content_block_start",
-                                    {
-                                        "index": 0,
-                                        "content_block": {"type": "text", "text": ""},
-                                    },
-                                )
-                                text_block_opened = True
-                            # `response.text.delta` is accepted by BOTH code
-                            # paths — the main agent loop (gz / processSSEData)
-                            # and the startup passthrough probe (XHo). Emitting
-                            # `message.delta` in addition would double-count:
-                            # gz extracts text from either event.
-                            yield _sse("response.text.delta", {"text": to_send})
-                            text_already_sent = safe_upto
+                    text_block_opened = True
+                yield _sse("response.text.delta", {"text": to_send})
+                text_already_sent = safe_upto
 
-                # Tool calls (arrive complete in one message for Ollama)
-                for tc in msg.get("tool_calls") or []:
-                    fn = tc.get("function") or {}
-                    args = fn.get("arguments", {})
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            args = {"_raw_arguments": args}
-                    tool_uses.append(
-                        {
-                            "type": "tool_use",
-                            "id": tc.get("id") or f"call_{uuid.uuid4().hex[:8]}",
-                            "name": fn.get("name", ""),
-                            "input": args or {},
-                            "client_side_execute": True,
-                        }
-                    )
+        elif isinstance(ev, ToolUseEvent):
+            tool_uses.append(
+                {
+                    "type": "tool_use",
+                    "id": ev.id,
+                    "name": ev.name,
+                    "input": ev.input or {},
+                    "client_side_execute": True,
+                }
+            )
 
-                if chunk.get("done"):
-                    finish_reason = chunk.get("done_reason", "stop")
-                    break
+        elif isinstance(ev, DoneEvent):
+            finish_reason = ev.finish_reason or "stop"
+            backend_error = ev.error
+            break
+
+    if backend_error:
+        logger.error("backend error: %s", backend_error[:400])
+        yield _sse(
+            "response.text.delta",
+            {"text": f"[proxy: backend error — {backend_error[:300]}]"},
+        )
+        yield _sse(
+            "message.stop",
+            {
+                "message": {
+                    "id": message_id,
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": ""}],
+                    "stop_reason": "end_turn",
+                }
+            },
+        )
+        yield _sse_done()
+        return
 
     # Parse any embedded <function=…>…</function> blocks out of the pending text
     residual_text, text_tool_uses = _parse_text_tool_calls(pending_stream_text)
@@ -602,15 +543,17 @@ async def agent_run(request: Request):
         cortex_tools = []
     openai_tools = to_openai_tools(cortex_tools or [])
 
+    backend = _active_backend()
     logger.info(
-        "agent-run: model=%s msgs=%d tools=%d",
-        _current_model,
+        "agent-run: backend=%s model=%s msgs=%d tools=%d",
+        backend.name,
+        backend.model,
         len(openai_messages),
         len(openai_tools),
     )
 
     return StreamingResponse(
-        _stream_from_ollama(openai_messages, openai_tools),
+        _stream_from_backend(openai_messages, openai_tools),
         media_type="text/event-stream",
         headers={"cache-control": "no-cache", "connection": "keep-alive"},
     )
@@ -618,24 +561,32 @@ async def agent_run(request: Request):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "ollama": OLLAMA_BASE_URL, "model": _current_model, "ts": time.time()}
+    backend = _active_backend()
+    return {
+        "ok": True,
+        "backend": backend.name,
+        "base_url": backend.base_url,
+        "model": backend.model,
+        "ts": time.time(),
+    }
 
 
 @app.get("/model")
 async def get_model():
-    """Return the model the proxy is currently sending to Ollama."""
-    return {"model": _current_model, "default": OLLAMA_MODEL}
+    backend = _active_backend()
+    return {
+        "model": backend.model,
+        "default": CONFIG.backend.model,
+        "backend": backend.name,
+    }
 
 
 @app.post("/model")
 async def set_model(request: Request):
-    """Hot-swap the active model. Validates against `ollama list` before accepting.
+    """Hot-swap the active model. Validates against the backend's model list.
 
-    Body: ``{"model": "<name:tag>"}``. Persists for the life of the process; on
-    restart, the proxy falls back to ``OLLAMA_MODEL`` from the env (or its
-    built-in default).
+    Body: ``{"model": "<name>"}``. Persists for the life of the process.
     """
-    global _current_model
     try:
         body = await request.json()
     except Exception:
@@ -644,48 +595,98 @@ async def set_model(request: Request):
     if not new:
         return JSONResponse(status_code=400, content={"error": "missing 'model' field"})
 
-    timeout = httpx.Timeout(10.0, connect=5.0)
+    backend = _active_backend()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
-            r.raise_for_status()
-            available = [m.get("name") for m in r.json().get("models", [])]
+        available = await backend.list_models()
     except Exception as e:
         return JSONResponse(
             status_code=502,
-            content={"error": f"could not reach Ollama: {e}"},
+            content={"error": f"could not list models on backend {backend.name}: {e}"},
         )
 
-    if new not in available:
+    # If the backend can't list (e.g., no api_key), accept any name — the user
+    # knows best, and we'll surface the error on the next agent turn anyway.
+    if available and new not in available:
         return JSONResponse(
             status_code=400,
             content={
-                "error": f"model {new!r} not in `ollama list`",
+                "error": f"model {new!r} not available on backend {backend.name!r}",
                 "available": available,
             },
         )
 
-    previous = _current_model
-    _current_model = new
-    logger.info("model swapped: %s → %s", previous, new)
-    return {"ok": True, "previous": previous, "model": _current_model}
+    previous = backend.model
+    backend.model = new  # mutate in place; all backends store this attr
+    logger.info("model swapped (%s): %s → %s", backend.name, previous, new)
+    return {"ok": True, "backend": backend.name, "previous": previous, "model": new}
 
 
 @app.get("/models")
 async def list_models():
-    """Convenience: proxy `ollama list` so callers don't need a second client."""
-    timeout = httpx.Timeout(10.0, connect=5.0)
+    backend = _active_backend()
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
-            r.raise_for_status()
-            data = r.json()
+        names = await backend.list_models()
     except Exception as e:
         return JSONResponse(
-            status_code=502, content={"error": f"could not reach Ollama: {e}"}
+            status_code=502,
+            content={"error": f"could not reach backend {backend.name}: {e}"},
         )
-    names = sorted(m.get("name", "") for m in data.get("models", []))
-    return {"current": _current_model, "default": OLLAMA_MODEL, "available": names}
+    return {
+        "backend": backend.name,
+        "current": backend.model,
+        "default": CONFIG.backend.model,
+        "available": names,
+    }
+
+
+@app.get("/backend")
+async def get_backend_info():
+    backend = _active_backend()
+    return {
+        "name": backend.name,
+        "base_url": backend.base_url,
+        "model": backend.model,
+        "configured": list(CONFIG._all_backends.keys()),
+    }
+
+
+@app.post("/backend")
+async def set_backend(request: Request):
+    """Switch to a different configured backend at runtime.
+
+    Body: ``{"backend": "ollama"|"openai"|"anthropic", "model": "<optional>"}``.
+    The backend must be defined in cortex_ollama.toml under ``[backends.<name>]``.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_json"})
+    new_name = (body.get("backend") or "").strip()
+    if not new_name:
+        return JSONResponse(status_code=400, content={"error": "missing 'backend' field"})
+
+    try:
+        cfg = CONFIG.with_backend(new_name)
+    except KeyError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    override_model = (body.get("model") or "").strip()
+    if override_model:
+        cfg.model = override_model
+
+    new_backend = get_backend(
+        cfg.name, cfg.base_url, cfg.model, cfg.api_key, cfg.api_version
+    )
+    previous = _active_backend().name
+    _state["backend_name"] = new_backend.name
+    _state["backend"] = new_backend
+    logger.info("backend swapped: %s → %s (model=%s)", previous, new_backend.name, new_backend.model)
+    return {
+        "ok": True,
+        "previous": previous,
+        "backend": new_backend.name,
+        "model": new_backend.model,
+    }
 
 
 # ---------------------------------------------------------------------------

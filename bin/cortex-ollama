@@ -14,12 +14,38 @@ set -uo pipefail
 
 export CORTEX_AGENT_USE_LOCAL_ORCHESTRATOR=1
 export NODE_TLS_REJECT_UNAUTHORIZED=0
-export CORTEX_AGENT_CONNECTION="${CORTEX_AGENT_CONNECTION:-ollama}"
 
-PROXY_HTTP_PORT="${CORTEX_PROXY_HTTP_PORT:-2031}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CORTEX_BIN="${CORTEX_BIN:-$(command -v cortex 2>/dev/null || echo "$HOME/.local/bin/cortex")}"
-OLLAMA_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+
+# Pull defaults out of cortex_ollama.toml (env vars still take precedence
+# inside the proxy itself; this is just so the wrapper has the right port and
+# Snowflake connection names without us re-implementing config layering).
+read_config() {
+  ( cd "$REPO_DIR" && python3 - <<'PY'
+import sys, os
+sys.path.insert(0, os.getcwd())
+from proxy import config as c
+cfg = c.load()
+print("AGENT_CONNECTION=", cfg.agent_connection, sep="")
+print("SQL_CONNECTION=", cfg.sql_connection, sep="")
+print("HTTP_PORT=", cfg.http_port, sep="")
+print("HTTPS_PORT=", cfg.https_port, sep="")
+print("BACKEND=", cfg.backend.name, sep="")
+print("BACKEND_URL=", cfg.backend.base_url, sep="")
+print("BACKEND_MODEL=", cfg.backend.model, sep="")
+PY
+  )
+}
+eval "$(read_config | sed 's/^/_CFG_/')"
+
+# Apply config; env var (if set) wins over config file.
+export CORTEX_AGENT_CONNECTION="${CORTEX_AGENT_CONNECTION:-${_CFG_AGENT_CONNECTION:-ollama}}"
+if [[ -z "${CORTEX_SQL_CONNECTION:-}" ]] && [[ -n "${_CFG_SQL_CONNECTION:-}" ]]; then
+  export CORTEX_SQL_CONNECTION="${_CFG_SQL_CONNECTION}"
+fi
+PROXY_HTTP_PORT="${CORTEX_PROXY_HTTP_PORT:-${_CFG_HTTP_PORT:-2031}}"
+OLLAMA_URL="${OLLAMA_BASE_URL:-${_CFG_BACKEND_URL:-http://127.0.0.1:11434}}"
 
 usage() {
   cat <<USAGE
@@ -178,12 +204,17 @@ try: ms = json.load(sys.stdin).get("models", [])
 except Exception: ms = []
 print(", ".join(sorted(m["name"] for m in ms)))' 2>/dev/null || echo "")
 
+ACTIVE_BACKEND=$(curl -sS --max-time 2 "http://127.0.0.1:${PROXY_HTTP_PORT}/healthz" 2>/dev/null \
+  | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("backend",""))
+except Exception: pass' 2>/dev/null || echo "")
+
 if [[ -n "${CORTEX_SQL_CONNECTION:-}" ]]; then
-  echo "cortex-ollama: hybrid mode — agent=${CORTEX_AGENT_CONNECTION}, sql=${CORTEX_SQL_CONNECTION}, model=${ACTIVE_MODEL}"
+  echo "cortex-ollama: hybrid mode — agent=${CORTEX_AGENT_CONNECTION}, sql=${CORTEX_SQL_CONNECTION}, backend=${ACTIVE_BACKEND}, model=${ACTIVE_MODEL}"
 else
-  echo "cortex-ollama: fully-local mode — model=${ACTIVE_MODEL}"
+  echo "cortex-ollama: fully-local mode — backend=${ACTIVE_BACKEND}, model=${ACTIVE_MODEL}"
 fi
-if [[ -n "$AVAILABLE_MODELS" ]]; then
+if [[ "$ACTIVE_BACKEND" == "ollama" ]] && [[ -n "$AVAILABLE_MODELS" ]]; then
   echo "cortex-ollama: ollama has [${AVAILABLE_MODELS}] — set OLLAMA_MODEL to switch."
 fi
 
