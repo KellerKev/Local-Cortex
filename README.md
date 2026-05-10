@@ -82,22 +82,25 @@ pixi run cortex --                 # interactive session
 
 ### Switching local models
 
-Three ways, increasing in scope of effect.
+One knob: the `OLLAMA_MODEL` environment variable.
 
 ```bash
-# 1. One-shot: which models do I have?
+# What's installed?
 pixi run cortex -- --list-models
 
-# 2. Per-launch: pin a model for this run only.
-pixi run cortex -- --model devstral-small-2:latest -p "review my diff"
+# Pin a model for this run.
+OLLAMA_MODEL=devstral-small-2:latest pixi run tui
 
-# 3. Hot-swap on a running proxy without restarting cortex.
-#    --model flag against an already-running proxy POSTs /model and the swap
-#    takes effect on the very next agent turn.
-pixi run cortex -- --model gemma3:27b
+# Pin a model for this shell session.
+export OLLAMA_MODEL=qwen3.6:35b-a3b
+pixi run tui
 ```
 
-Behind the scenes there's a tiny REST surface on the proxy:
+Mid-session, without exiting the TUI, run the bundled slash command
+`/local-models` — it prints the curl recipe to swap on the live proxy. The
+swap takes effect on the very next agent turn.
+
+The proxy also exposes a small REST surface for scripts:
 
 ```bash
 curl http://127.0.0.1:2031/healthz   # current model + ollama URL + timestamp

@@ -23,21 +23,22 @@ OLLAMA_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 
 usage() {
   cat <<USAGE
-Usage: cortex-ollama [--model NAME] [--pick] [--list-models] [-- <cortex args>]
+Usage: cortex-ollama [--list-models] [-h] [-- <cortex args>]
+
+Pick a model with the OLLAMA_MODEL environment variable:
+
+  OLLAMA_MODEL=qwen3.6:35b-a3b pixi run tui
+  export OLLAMA_MODEL=qwen3.6:35b-a3b   # then run as normal
+
+Mid-session swaps (without exiting cortex) are done from inside the TUI via
+the bundled slash command \`/local-models\`, which prints the curl recipe.
 
 Options:
-  --model, -M NAME    Use this Ollama model. Hot-swaps a running proxy via
-                      POST /model, or sets OLLAMA_MODEL for the proxy we're
-                      about to start.
-  --pick, -P          Interactive model picker. Shows the locally-installed
-                      Ollama models and lets you choose by number.
   --list-models       Print models available in Ollama and exit.
-  --help, -h          Show this help.
-
-Anything after -- (or unrecognised flags) is passed straight through to cortex.
+  -h                  Show this help. (--help is forwarded to cortex.)
 
 Environment:
-  OLLAMA_MODEL              Default model when starting the proxy.
+  OLLAMA_MODEL              Model the proxy sends to Ollama (default: see proxy/server.py).
   CORTEX_SQL_CONNECTION     Real Snowflake connection name (enables hybrid mode).
   CORTEX_AGENT_CONNECTION   Connection cortex uses for auth/agent (default: ollama).
 USAGE
@@ -51,60 +52,14 @@ except Exception: ms = []
 [print(m["name"]) for m in sorted(ms, key=lambda m: m["name"])]'
 }
 
-pick_model_interactive() {
-  # Read into array portably — macOS bash 3.2 has no mapfile.
-  local choice line
-  local -a models=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && models+=("$line")
-  done < <(list_ollama_models)
-  if [[ ${#models[@]} -eq 0 ]]; then
-    echo "cortex-ollama: no models in \`ollama list\` — install one with \`ollama pull <name>\`" >&2
-    return 1
-  fi
-  if [[ ${#models[@]} -eq 1 ]]; then
-    REQUESTED_MODEL="${models[0]}"
-    echo "cortex-ollama: only one model available — using ${REQUESTED_MODEL}"
-    return 0
-  fi
-  if [[ ! -t 0 ]]; then
-    echo "cortex-ollama: --pick needs an interactive terminal" >&2
-    return 1
-  fi
-  echo
-  echo "Locally-installed Ollama models:"
-  PS3="Pick a model number (or Enter to cancel): "
-  select choice in "${models[@]}"; do
-    if [[ -n "$choice" ]]; then
-      REQUESTED_MODEL="$choice"
-      echo "cortex-ollama: selected ${REQUESTED_MODEL}"
-      return 0
-    fi
-    return 1
-  done
-}
-
-REQUESTED_MODEL=""
-PICK=0
 PASSTHRU=()
-# We deliberately do NOT special-case `--` here. `pixi run tui -- --pick`
-# delivers `-- --pick` to this wrapper; if we treated `--` as "stop parsing,
-# pass the rest verbatim", `--pick` would go to cortex (which doesn't know
-# it). Instead, our wrapper flags are recognized anywhere on the line, and
-# everything else (including a literal `--`) is forwarded to cortex.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --model|-M) REQUESTED_MODEL="${2:-}"; shift 2 ;;
-    --pick|-P) PICK=1; shift ;;
     --list-models) list_ollama_models; exit 0 ;;
     -h) usage; exit 0 ;;  # short -h is ours; --help is forwarded to cortex
     *) PASSTHRU+=("$1"); shift ;;
   esac
 done
-
-if [[ $PICK -eq 1 ]]; then
-  pick_model_interactive || { echo "cortex-ollama: model selection cancelled" >&2; exit 1; }
-fi
 
 if [[ ! -x "$CORTEX_BIN" ]]; then
   echo "cortex-ollama: cannot find the cortex binary. Set CORTEX_BIN." >&2
@@ -186,22 +141,9 @@ install_slash_commands
 
 if healthz; then
   echo "cortex-ollama: proxy already running on :${PROXY_HTTP_PORT} — reusing it."
-  if [[ -n "$REQUESTED_MODEL" ]]; then
-    RESP=$(curl -sS -X POST -H 'Content-Type: application/json' \
-      -d "{\"model\":\"${REQUESTED_MODEL}\"}" \
-      "http://127.0.0.1:${PROXY_HTTP_PORT}/model")
-    if echo "$RESP" | grep -q '"ok": true\|"ok":true'; then
-      echo "cortex-ollama: model swapped → ${REQUESTED_MODEL}"
-    else
-      echo "cortex-ollama: model swap FAILED:" >&2
-      echo "$RESP" >&2
-      exit 1
-    fi
-  fi
 else
-  if [[ -n "$REQUESTED_MODEL" ]]; then
-    export OLLAMA_MODEL="$REQUESTED_MODEL"
-    echo "cortex-ollama: starting proxy with OLLAMA_MODEL=${REQUESTED_MODEL}..."
+  if [[ -n "${OLLAMA_MODEL:-}" ]]; then
+    echo "cortex-ollama: starting proxy with OLLAMA_MODEL=${OLLAMA_MODEL}..."
   else
     echo "cortex-ollama: starting proxy..."
   fi
@@ -242,7 +184,7 @@ else
   echo "cortex-ollama: fully-local mode — model=${ACTIVE_MODEL}"
 fi
 if [[ -n "$AVAILABLE_MODELS" ]]; then
-  echo "cortex-ollama: ollama has [${AVAILABLE_MODELS}] — pass --model NAME to switch."
+  echo "cortex-ollama: ollama has [${AVAILABLE_MODELS}] — set OLLAMA_MODEL to switch."
 fi
 
 # Pass the active local model through Cortex's -m flag so the TUI header
