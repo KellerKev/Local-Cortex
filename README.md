@@ -464,4 +464,6 @@ If a future Cortex release **does** rename a required anchor:
 - [proxy/__main__.py](proxy/__main__.py) — dual HTTP + HTTPS entrypoint
 - [proxy/capture.py](proxy/capture.py) — raw request logger (for future reverse-engineering)
 
-Reverse-engineered against Cortex Code `1.0.48+043705`.
+## License
+
+MIT — see [LICENSE](LICENSE).
