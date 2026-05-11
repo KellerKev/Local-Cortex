@@ -149,6 +149,39 @@ curl -X POST http://127.0.0.1:2031/model \
 Inside the TUI, the bundled `/local-models` slash command prints the swap
 recipe so you don't have to leave the session.
 
+### Testing the OpenAI / Anthropic backends without paid keys
+
+Ollama exposes an **OpenAI-compatible** `/v1` endpoint, so you can exercise
+the `openai` backend end-to-end against your local Ollama for free:
+
+```toml
+[backends.openai]
+base_url = "http://127.0.0.1:11434/v1"
+api_key  = "ollama"           # any non-empty string
+model    = "qwen3.6:35b-a3b"   # whatever you have in `ollama list`
+```
+
+Switch to it (`backend = "openai"`), restart the proxy, and Cortex still
+works — just routed through `/v1/chat/completions` instead of `/api/chat`.
+
+For the **Anthropic** backend, Ollama does *not* implement `/v1/messages`.
+Run [LiteLLM](https://docs.litellm.ai/docs/proxy/quick_start) as a translator
+in front of Ollama:
+
+```bash
+pipx install 'litellm[proxy]'
+litellm --model ollama_chat/qwen3.6:35b-a3b --port 14000
+```
+
+Then point the proxy at LiteLLM:
+
+```toml
+[backends.anthropic]
+base_url = "http://127.0.0.1:14000"
+api_key  = "anything"
+model    = "ollama_chat/qwen3.6:35b-a3b"
+```
+
 ### REST surface
 
 ```bash

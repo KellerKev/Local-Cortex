@@ -22,11 +22,24 @@ model    = "qwen3.6:35b-a3b"
 [backends.openai]
 # Works with OpenAI itself and any /v1/chat/completions-compatible API
 # (xAI Grok, Groq, OpenRouter, Together, vLLM, llama.cpp server, etc.).
+# Tip: Ollama also serves an OpenAI-compat /v1 — handy for local testing
+# of this backend without an API key:
+#   base_url = "http://127.0.0.1:11434/v1"
+#   api_key  = "ollama"
+#   model    = "qwen3.6:35b-a3b"
 base_url = "https://api.openai.com/v1"
 api_key  = ""          # or set OPENAI_API_KEY in env
 model    = "gpt-4o"
 
 [backends.anthropic]
+# Ollama does NOT serve /v1/messages natively. To test the Anthropic backend
+# locally without a real API key, run LiteLLM as a translator:
+#   pipx install 'litellm[proxy]'
+#   litellm --model ollama_chat/qwen3.6:35b-a3b --port 14000
+# then point this backend at it:
+#   base_url = "http://127.0.0.1:14000"
+#   api_key  = "anything"
+#   model    = "ollama_chat/qwen3.6:35b-a3b"
 base_url = "https://api.anthropic.com/v1"
 api_key  = ""          # or set ANTHROPIC_API_KEY in env
 model    = "claude-sonnet-4-5"
