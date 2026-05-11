@@ -1,0 +1,32 @@
+# Drive llama.cpp's built-in HTTP server (llama-server) via our `openai`
+# backend. llama-server exposes an OpenAI-compatible /v1/chat/completions
+# endpoint, so it slots in cleanly.
+#
+# Start llama-server first (any model — the example uses Mistral-Medium-3.5):
+#
+#   ./llama-cpp-turboquant/build/bin/llama-server \
+#     -m models/UD-Q4_K_XL/Mistral-Medium-3.5-128B-UD-Q4_K_XL-00001-of-00003.gguf \
+#     --host 127.0.0.1 --port 8080 \
+#     -fa on -ngl 99 -c 16384 --threads 12 \
+#     --jinja            # enables structured tool-call parsing
+#
+# Then:
+#   cp configs/llama-server.toml cortex_ollama.toml
+#   pixi run tui
+
+backend = "openai"
+
+[backends.openai]
+base_url = "http://127.0.0.1:8080/v1"
+api_key  = "anything"            # llama-server doesn't enforce a value
+# `model` is cosmetic for llama-server (it serves whatever -m points at).
+# Set it to anything you want surfaced in the TUI's "Model:" header line.
+model    = "mistral-medium-3.5-128b"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = ""            # set to "streamgen"/"sfse-na" for hybrid mode
+
+[proxy]
+http_port  = 2031
+https_port = 2443

@@ -23,3 +23,6 @@ certs/*.crt
 .idea/
 .vscode/
 *.swp
+
+# Local proxy config — copy from configs/ and edit; don't commit personal paths.
+/cortex_ollama.toml
