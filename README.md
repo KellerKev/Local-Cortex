@@ -18,9 +18,7 @@
 
 > **Heads-up.** This is a spare-time proof-of-tech for educational and
 > *art-of-the-possible* purposes. **Not** intended for production use, and
-> **not** supported, sponsored, or endorsed by Snowflake. Built by
-> reverse-engineering public Cortex Code binaries; the wire protocol it
-> targets can change at any release.
+> **not** supported, sponsored, or endorsed by Snowflake.
 
 **Local-Cortex** routes Cortex Code's inference traffic at the LLM of your
 choice and leaves the rest of the TUI — tool calling, slash commands,
