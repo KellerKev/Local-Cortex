@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" role="img" aria-label="Local-Cortex">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0"   stop-color="#5BC0EB"/>
+      <stop offset="0.5" stop-color="#3B82F6"/>
+      <stop offset="1"   stop-color="#1E3A8A"/>
+    </linearGradient>
+    <linearGradient id="t" x1="0" x2="1">
+      <stop offset="0"   stop-color="#E2E8F0"/>
+      <stop offset="1"   stop-color="#94A3B8"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- snowflake + chip mark -->
+  <g transform="translate(100 100)" filter="url(#glow)">
+    <!-- six-arm snowflake -->
+    <g stroke="url(#g)" stroke-width="6" stroke-linecap="round" fill="none">
+      <line x1="0" y1="-70" x2="0" y2="70"/>
+      <line x1="-60.6" y1="-35" x2="60.6" y2="35"/>
+      <line x1="-60.6" y1="35"  x2="60.6" y2="-35"/>
+      <!-- side branches -->
+      <g stroke-width="4">
+        <line x1="0" y1="-55" x2="-12" y2="-43"/>
+        <line x1="0" y1="-55" x2="12"  y2="-43"/>
+        <line x1="0" y1="55"  x2="-12" y2="43"/>
+        <line x1="0" y1="55"  x2="12"  y2="43"/>
+        <line x1="-48" y1="-28" x2="-58" y2="-16"/>
+        <line x1="-48" y1="-28" x2="-38" y2="-40"/>
+        <line x1="48"  y1="28"  x2="58"  y2="16"/>
+        <line x1="48"  y1="28"  x2="38"  y2="40"/>
+        <line x1="-48" y1="28"  x2="-58" y2="16"/>
+        <line x1="-48" y1="28"  x2="-38" y2="40"/>
+        <line x1="48"  y1="-28" x2="58"  y2="-16"/>
+        <line x1="48"  y1="-28" x2="38"  y2="-40"/>
+      </g>
+    </g>
+    <!-- central chip -->
+    <rect x="-22" y="-22" width="44" height="44" rx="7" fill="#0F172A" stroke="url(#g)" stroke-width="3"/>
+    <g stroke="url(#g)" stroke-width="2" stroke-linecap="round">
+      <line x1="-22" y1="-12" x2="-30" y2="-12"/>
+      <line x1="-22" y1="0"   x2="-30" y2="0"/>
+      <line x1="-22" y1="12"  x2="-30" y2="12"/>
+      <line x1="22"  y1="-12" x2="30"  y2="-12"/>
+      <line x1="22"  y1="0"   x2="30"  y2="0"/>
+      <line x1="22"  y1="12"  x2="30"  y2="12"/>
+      <line x1="-12" y1="-22" x2="-12" y2="-30"/>
+      <line x1="0"   y1="-22" x2="0"   y2="-30"/>
+      <line x1="12"  y1="-22" x2="12"  y2="-30"/>
+      <line x1="-12" y1="22"  x2="-12" y2="30"/>
+      <line x1="0"   y1="22"  x2="0"   y2="30"/>
+      <line x1="12"  y1="22"  x2="12"  y2="30"/>
+    </g>
+    <text x="0" y="6" text-anchor="middle"
+          font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="20" font-weight="700" fill="#5BC0EB">LC</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="210" y="98" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Inter, sans-serif"
+        font-size="56" font-weight="800" fill="url(#t)" letter-spacing="-2">Local-Cortex</text>
+  <text x="212" y="140" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-size="18" fill="#64748B">Snowflake Cortex Code · fully local. Pluggable backends.</text>
+</svg>

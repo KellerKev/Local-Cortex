@@ -1,7 +1,7 @@
 [project]
-name = "cortex_ollama"
+name = "local-cortex"
 version = "0.1.0"
-description = "Proxy that emulates Snowflake Cortex agent:run so Cortex Code CLI can be driven by a local Ollama server."
+description = "Local-Cortex — Snowflake Cortex Code CLI driven by any local or remote LLM backend (Ollama, OpenAI-compat, Anthropic). Pluggable, single TOML config."
 authors = ["kevin"]
 channels = ["conda-forge"]
 platforms = ["osx-arm64"]

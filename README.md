@@ -1,9 +1,28 @@
-# cortex_ollama
+<p align="center">
+  <img src="assets/logo.svg" alt="Local-Cortex" width="560"/>
+</p>
+
+<h1 align="center">Local-Cortex</h1>
+<p align="center">
+  <em>Snowflake Cortex Code CLI, fully local. Pluggable backends. Optional hybrid mode for real SQL.</em>
+</p>
+
+<!-- ───── Demo media (drop your files into assets/ and uncomment) ───────────
+<p align="center">
+  <img src="assets/demo.gif" alt="Local-Cortex demo" width="800"/>
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-tui.png"      alt="TUI in fully-local mode"   width="49%"/>
+  <img src="assets/screenshot-hybrid.png"   alt="Hybrid mode with real SQL" width="49%"/>
+</p>
+────────────────────────────────────────────────────────────────────────── -->
 
 Run Snowflake **Cortex Code CLI** against any LLM backend — local **Ollama**,
-**OpenAI** (or any OpenAI-compat provider), or **Anthropic** — without ever
-touching `snowflakecomputing.com` for inference. SQL tools can either be
-stubbed (fully-local) or routed at a real Snowflake account (hybrid).
+**OpenAI** (or any OpenAI-compat provider — xAI/Groq/OpenRouter/llama.cpp/
+LMStudio), or **Anthropic** — without ever touching `snowflakecomputing.com`
+for inference. SQL tools can be stubbed (fully-local) or routed at a real
+Snowflake account (hybrid).
 
 ## How it works
 
