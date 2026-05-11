@@ -170,17 +170,33 @@ in front of Ollama:
 
 ```bash
 pipx install 'litellm[proxy]'
-litellm --model ollama_chat/qwen3.6:35b-a3b --port 14000
+litellm --model ollama_chat/qwen3.6:35b-a3b --port 14000 --drop_params
 ```
 
-Then point the proxy at LiteLLM:
+Then point the proxy at LiteLLM (note `/v1` in the URL — LiteLLM exposes the
+Anthropic endpoint at `/v1/messages`):
 
 ```toml
 [backends.anthropic]
-base_url = "http://127.0.0.1:14000"
+base_url = "http://127.0.0.1:14000/v1"
 api_key  = "anything"
 model    = "ollama_chat/qwen3.6:35b-a3b"
 ```
+
+What works in this loop (verified):
+
+- **Text streaming end-to-end** — Cortex sees `content_block_start` then
+  `response.text.delta` tokens streamed back through the Anthropic adapter,
+  LiteLLM, and Ollama. The full proxy ↔ Anthropic SSE grammar is exercised.
+
+What doesn't (upstream limitation, not in our code):
+
+- **Tool-calling** — Cortex sends ~37 tools per turn. LiteLLM translates the
+  Anthropic-shaped tool defs into Ollama's chat template, and qwen-family
+  models tend to crash the llama runner under that combined payload
+  (`llama runner terminated, exit status 2`). The Anthropic adapter itself
+  is correct; against real `api.anthropic.com` with a Claude model this path
+  works fine.
 
 ### REST surface
 
