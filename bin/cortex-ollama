@@ -147,6 +147,60 @@ PY
 }
 patch_settings || { echo "cortex-ollama: failed to patch settings.json" >&2; exit 1; }
 
+# The TUI's "Agent Connection:" line shows whatever the active connection
+# is called in ~/.snowflake/config.toml. Users picking a backend like
+# llama.cpp / LMStudio usually want that name to surface instead of "ollama".
+# If `agent_connection` names something the user hasn't already added, drop
+# in a proxy-pointing block automatically (idempotent; safe to keep). Refuse
+# to clobber existing real-Snowflake blocks with the same name.
+ensure_agent_connection_block() {
+  CORTEX_AGENT_CONNECTION="$CORTEX_AGENT_CONNECTION" \
+  CORTEX_PROXY_HTTPS_PORT="${CORTEX_PROXY_HTTPS_PORT:-${_CFG_HTTPS_PORT:-2443}}" \
+  python3 - <<'PY'
+import os, pathlib, re, sys
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+p = pathlib.Path(os.path.expanduser("~/.snowflake/config.toml"))
+text = p.read_text() if p.exists() else ""
+name = os.environ["CORTEX_AGENT_CONNECTION"].strip()
+https_port = int(os.environ.get("CORTEX_PROXY_HTTPS_PORT", "2443"))
+
+data = tomllib.loads(text) if text else {}
+existing = data.get("connections", {}).get(name)
+if existing:
+    host = str(existing.get("host", ""))
+    if host not in ("localhost", "127.0.0.1"):
+        print(
+            f"cortex-ollama: connection '{name}' in ~/.snowflake/config.toml "
+            f"already exists and points at host={host!r}, not the local proxy. "
+            f"Refusing to overwrite — pick a different agent_connection in "
+            f"cortex_ollama.toml.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    sys.exit(0)  # already a proxy-pointing block, leave it alone
+
+block = (
+    f'\n[connections.{name}]\n'
+    f'account = "ollamaproxy"\n'
+    f'host = "localhost"\n'
+    f'port = {https_port}\n'
+    f'user = "ollama"\n'
+    f'password = "dummy-pat-token"\n'
+    f'authenticator = "PROGRAMMATIC_ACCESS_TOKEN"\n'
+    f'role = "PUBLIC"\n'
+)
+p.parent.mkdir(parents=True, exist_ok=True)
+new_text = text.rstrip() + ("\n" if text else "") + block
+p.write_text(new_text)
+print(f"cortex-ollama: added [connections.{name}] → localhost:{https_port} to ~/.snowflake/config.toml")
+PY
+}
+ensure_agent_connection_block || exit 1
+
 # Symlink the repo's slash commands into Cortex's global commands dir so
 # /local-model and /local-models are discoverable inside the TUI. Idempotent.
 install_slash_commands() {

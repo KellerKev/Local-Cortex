@@ -24,7 +24,7 @@ model       = "ollama_chat/qwen3.6:35b-a3b"
 api_version = "2023-06-01"
 
 [snowflake]
-agent_connection = "ollama"
+agent_connection = "litellm"        # TUI "Agent Connection:" label
 sql_connection   = ""
 
 [proxy]

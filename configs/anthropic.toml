@@ -13,7 +13,7 @@ model       = "claude-sonnet-4-5"
 api_version = "2023-06-01"
 
 [snowflake]
-agent_connection = "ollama"
+agent_connection = "anthropic"      # TUI "Agent Connection:" label
 sql_connection   = ""               # set to e.g. "streamgen" for hybrid mode
 
 [proxy]

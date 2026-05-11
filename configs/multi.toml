@@ -25,6 +25,8 @@ model       = "claude-sonnet-4-5"
 api_version = "2023-06-01"
 
 [snowflake]
+# TUI label. Set to whatever matches your active backend so the connection-
+# box header reads sensibly (e.g. "ollama", "openai", "anthropic", "lmstudio").
 agent_connection = "ollama"
 sql_connection   = ""               # set to e.g. "streamgen" for hybrid mode
 

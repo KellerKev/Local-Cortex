@@ -19,7 +19,9 @@ model    = "gpt-4o"
 #   base_url = "https://api.together.xyz/v1"
 
 [snowflake]
-agent_connection = "ollama"
+# TUI "Agent Connection:" label. Change to "openai" / "openrouter" / "groq" /
+# "xai" etc. to match what you're actually pointing the backend at.
+agent_connection = "openai"
 sql_connection   = ""               # set to e.g. "streamgen" for hybrid mode
 
 [proxy]

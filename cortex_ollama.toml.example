@@ -51,8 +51,11 @@ api_version = "2023-06-01"
 # ~/.snowflake/config.toml — that's where the cortex CLI reads them).
 # ---------------------------------------------------------------------------
 [snowflake]
-# Connection cortex authenticates with. Keep this pointing at the local
-# proxy stub (default name "ollama") for browser-free auth.
+# Connection cortex authenticates with. This name also drives the TUI's
+# "Agent Connection:" header line — change it to "llama-cpp", "lmstudio",
+# "openrouter", or whatever matches what you're actually running. The
+# wrapper auto-adds the matching [connections.<name>] block to
+# ~/.snowflake/config.toml (pointed at our local stub).
 agent_connection = "ollama"
 
 # Connection used by the sql_execute tool. Empty = fully-local mode (SQL

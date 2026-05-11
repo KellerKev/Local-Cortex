@@ -24,7 +24,10 @@ api_key  = "anything"            # llama-server doesn't enforce a value
 model    = "mistral-medium-3.5-128b"
 
 [snowflake]
-agent_connection = "ollama"
+# The TUI's "Agent Connection:" line shows this name. Anything works —
+# the wrapper auto-adds the matching [connections.<name>] block to
+# ~/.snowflake/config.toml (pointed at our local stub).
+agent_connection = "llama-cpp"
 sql_connection   = ""            # set to "streamgen"/"sfse-na" for hybrid mode
 
 [proxy]
