@@ -1,0 +1,27 @@
+# Real OpenAI (or any /v1/chat/completions-compatible provider).
+# Works against OpenAI itself, xAI/Groq/OpenRouter/Together/vLLM/llama.cpp.
+#
+#   cp configs/openai.toml cortex_ollama.toml
+#   # paste your key into api_key, or export OPENAI_API_KEY in env
+#   pixi run tui
+
+backend = "openai"
+
+[backends.openai]
+base_url = "https://api.openai.com/v1"
+api_key  = ""                       # or set OPENAI_API_KEY in env
+model    = "gpt-4o"
+
+# Alternative providers (uncomment + adjust):
+#   base_url = "https://api.x.ai/v1"           # xAI Grok
+#   base_url = "https://api.groq.com/openai/v1"
+#   base_url = "https://openrouter.ai/api/v1"
+#   base_url = "https://api.together.xyz/v1"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = ""               # set to e.g. "streamgen" for hybrid mode
+
+[proxy]
+http_port  = 2031
+https_port = 2443

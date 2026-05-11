@@ -1,0 +1,32 @@
+# Drive the `anthropic` backend against a local LiteLLM proxy that
+# translates Anthropic Messages → Ollama. Useful for testing the Anthropic
+# code path without paying for API keys.
+#
+# Setup:
+#   pipx install 'litellm[proxy]'
+#   litellm --model ollama_chat/qwen3.6:35b-a3b --port 14000 --drop_params
+#
+# Then:
+#   cp configs/anthropic-via-litellm.toml cortex_ollama.toml
+#   pixi run tui
+#
+# Verified: text streaming end-to-end works.
+# Known limitation: tool-calling with Cortex's default 37-tool payload can
+# crash Ollama's llama runner under LiteLLM's tool translation. Real
+# Anthropic doesn't have this issue — it's specific to the local mock chain.
+
+backend = "anthropic"
+
+[backends.anthropic]
+base_url    = "http://127.0.0.1:14000/v1"    # LiteLLM exposes /v1/messages
+api_key     = "anything"                      # LiteLLM doesn't enforce a value
+model       = "ollama_chat/qwen3.6:35b-a3b"
+api_version = "2023-06-01"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = ""
+
+[proxy]
+http_port  = 2031
+https_port = 2443

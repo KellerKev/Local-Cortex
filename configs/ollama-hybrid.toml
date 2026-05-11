@@ -1,0 +1,22 @@
+# Hybrid: local Ollama for the agent loop, real Snowflake for SQL tools.
+# The `sql_execute` tool is pinned to your real account; everything else
+# (read/write/bash/grep/glob/etc.) runs locally.
+#
+#   cp configs/ollama-hybrid.toml cortex_ollama.toml
+#   # edit sql_connection below to match a [connections.<name>] in
+#   # ~/.snowflake/config.toml
+#   pixi run tui
+
+backend = "ollama"
+
+[backends.ollama]
+base_url = "http://127.0.0.1:11434"
+model    = "qwen3.6:35b-a3b"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = "streamgen"     # ← change to YOUR real connection name
+
+[proxy]
+http_port  = 2031
+https_port = 2443

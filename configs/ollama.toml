@@ -1,0 +1,19 @@
+# Default: local Ollama, fully-local mode (no Snowflake contact).
+# Cortex Code's TUI + tool calling all run against your local Ollama server.
+#
+#   cp configs/ollama.toml cortex_ollama.toml
+#   pixi run tui
+
+backend = "ollama"
+
+[backends.ollama]
+base_url = "http://127.0.0.1:11434"
+model    = "qwen3.6:35b-a3b"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = ""      # empty = SQL tools stubbed (return no rows)
+
+[proxy]
+http_port  = 2031
+https_port = 2443

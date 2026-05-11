@@ -1,0 +1,21 @@
+# Real Anthropic API.
+#
+#   cp configs/anthropic.toml cortex_ollama.toml
+#   # paste your key into api_key, or export ANTHROPIC_API_KEY in env
+#   pixi run tui
+
+backend = "anthropic"
+
+[backends.anthropic]
+base_url    = "https://api.anthropic.com/v1"
+api_key     = ""                    # or set ANTHROPIC_API_KEY in env
+model       = "claude-sonnet-4-5"
+api_version = "2023-06-01"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = ""               # set to e.g. "streamgen" for hybrid mode
+
+[proxy]
+http_port  = 2031
+https_port = 2443

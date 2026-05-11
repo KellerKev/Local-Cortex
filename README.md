@@ -48,10 +48,30 @@ routes every agent turn to whichever backend you've configured.
 pixi run gen-cert          # self-signed cert for localhost HTTPS listener
 pixi install               # installs the python env (~40 MB)
 
-# Optional: copy the sample proxy config and edit it.
-cp cortex_ollama.toml.example cortex_ollama.toml
-$EDITOR cortex_ollama.toml
+# Pick a scenario and copy its config in. Each file under configs/ is a
+# self-contained example you can use as-is or as a starting point.
+cp configs/ollama.toml cortex_ollama.toml         # local Ollama (default)
+# or
+cp configs/ollama-hybrid.toml cortex_ollama.toml  # Ollama + real Snowflake SQL
+# or
+cp configs/openai.toml cortex_ollama.toml         # OpenAI / xAI / Groq / …
+# or
+cp configs/anthropic.toml cortex_ollama.toml      # real Anthropic
+# or
+cp configs/multi.toml cortex_ollama.toml          # all backends; hot-swap via REST
 ```
+
+Available samples:
+
+| File | Backend | SQL | Notes |
+|---|---|---|---|
+| `configs/ollama.toml`               | Ollama (`/api/chat`) | stubbed       | default; fully-local |
+| `configs/ollama-hybrid.toml`        | Ollama               | real Snowflake | edit `sql_connection` |
+| `configs/openai-via-ollama.toml`    | OpenAI-compat → Ollama | stubbed     | free test for openai backend |
+| `configs/openai.toml`               | OpenAI / xAI / Groq / etc. | stubbed | paste an api_key |
+| `configs/anthropic.toml`            | Anthropic Messages   | stubbed       | paste an api_key |
+| `configs/anthropic-via-litellm.toml`| Anthropic → LiteLLM → Ollama | stubbed | needs LiteLLM proxy; text path only |
+| `configs/multi.toml`                | all three configured | stubbed       | switch via `POST /backend` |
 
 The proxy looks for its config at, in order:
 

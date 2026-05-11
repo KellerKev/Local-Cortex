@@ -1,0 +1,21 @@
+# Drive the `openai` backend against Ollama's OpenAI-compat /v1 endpoint.
+# Useful for testing the OpenAI code path without paying for API keys.
+# Verified end-to-end (text + tool-call SSE).
+#
+#   cp configs/openai-via-ollama.toml cortex_ollama.toml
+#   pixi run tui
+
+backend = "openai"
+
+[backends.openai]
+base_url = "http://127.0.0.1:11434/v1"
+api_key  = "ollama"                 # any non-empty string
+model    = "qwen3.6:35b-a3b"
+
+[snowflake]
+agent_connection = "ollama"
+sql_connection   = ""
+
+[proxy]
+http_port  = 2031
+https_port = 2443
