@@ -36,17 +36,115 @@ Two undocumented Cortex hooks do all the heavy lifting:
 With those in place, Cortex starts up, authenticates against the proxy, and
 routes every agent turn to whichever backend you've configured.
 
+## Quick start
+
+You need three things on `$PATH`:
+
+1. **Cortex Code CLI** — install per Snowflake docs (`https://ai.snowflake.com/static/cc-scripts/install.sh`).
+2. **Ollama** — `https://ollama.com/download` and `ollama pull <some-model>`.
+3. **Python 3.11+** and **`openssl`** (both already on macOS/most Linux).
+
+Pick one of two install paths.
+
+### Path A — with pixi (recommended; reproducible env)
+
+```bash
+git clone https://github.com/KellerKev/Local-Cortex.git
+cd Local-Cortex
+pixi install                                         # ~40 MB python env
+pixi run gen-cert                                    # self-signed cert for :2443
+cp configs/ollama.toml cortex_ollama.toml            # any configs/*.toml works
+
+# add the proxy stub connection to ~/.snowflake/config.toml
+cat >> ~/.snowflake/config.toml <<'EOF'
+
+[connections.ollama]
+account = "ollamaproxy"
+host = "localhost"
+port = 2443
+user = "ollama"
+password = "dummy-pat-token"
+authenticator = "PROGRAMMATIC_ACCESS_TOKEN"
+role = "PUBLIC"
+EOF
+
+pixi run tui                                         # done — TUI boots
+```
+
+### Path B — without pixi (plain venv)
+
+```bash
+git clone https://github.com/KellerKev/Local-Cortex.git
+cd Local-Cortex
+
+python3 -m venv .venv && source .venv/bin/activate
+pip install fastapi uvicorn httpx pydantic
+
+# self-signed cert for the HTTPS listener (one-shot)
+mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  -keyout certs/localhost.key -out certs/localhost.crt \
+  -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+
+cp configs/ollama.toml cortex_ollama.toml
+
+# same connection block as Path A, see above
+cat >> ~/.snowflake/config.toml <<'EOF'
+
+[connections.ollama]
+account = "ollamaproxy"
+host = "localhost"
+port = 2443
+user = "ollama"
+password = "dummy-pat-token"
+authenticator = "PROGRAMMATIC_ACCESS_TOKEN"
+role = "PUBLIC"
+EOF
+
+# shell 1: run the proxy
+python -m proxy
+
+# shell 2: drive Cortex
+export CORTEX_AGENT_USE_LOCAL_ORCHESTRATOR=1
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+cortex -c ollama --no-auto-update
+```
+
+That's it. Cortex TUI now talks to your local Ollama for every turn.
+
+## What's verified
+
+End-to-end tested as of the latest commit:
+
+| Claim | Verified how |
+|---|---|
+| Ollama backend, text + tool calls + multi-turn | live Cortex turns; tool round-trip with `read` and `bash`; SQL `sql_execute` against real Snowflake |
+| OpenAI backend against Ollama's `/v1` | live Cortex turn through `openai_compat` adapter (free, no API key) |
+| OpenAI backend against any OpenAI-compat endpoint (xAI / Groq / OpenRouter / vLLM / llama.cpp / LMStudio) | live test against `llama-server` at `:8092` |
+| Anthropic backend — text streaming | live via LiteLLM → Ollama; SSE grammar matches `api.anthropic.com` |
+| Anthropic backend — tool calling | unit-tested with mock SSE; real Anthropic should work; LiteLLM→Ollama tool path crashes the runner upstream |
+| Hot-swap model via `POST /model` | observed next-turn change in proxy log |
+| Hot-swap backend via `POST /backend` | observed via `/healthz` reflecting the change |
+| Hybrid mode SQL routing | live `CURRENT_ACCOUNT()` against two real accounts (AWS Frankfurt, Azure West Europe) |
+| `agent_connection` TUI label + auto-add of connection block | live test with `agent_connection = "llama-cpp"` |
+| Update probe | 18 anchors pass on Cortex 1.0.73; fails loudly if any required string disappears |
+| Non-pixi install path | live test in a clean Python 3.13 venv (only fastapi/uvicorn/httpx/pydantic) |
+
 ## Features
 
 - **Pluggable backends** — `ollama` (local, default), `openai`
   (covers OpenAI itself plus xAI/Groq/OpenRouter/Together/vLLM/llama.cpp via
   their OpenAI-compat endpoints), and `anthropic` (Messages API). Hot-swap
   any of them without restarting the proxy via `POST /backend`.
-- **Tool calling round-trip** — `read`, `write`, `edit`, `bash`, `grep`,
-  `glob`, `web_fetch`, and all of Cortex's client-MCP tools (task, team,
-  cron). Translator handles structured tool_calls *and* qwen-style
-  `<function=...>` text fallback; the result round-trip maps Cortex's nested
-  `tool_use.*` / `tool_result.*` shapes to OpenAI / Anthropic message shapes.
+- **Tool calling round-trip** — bare built-ins (`read`, `write`, `edit`,
+  `bash`, `bash_output`, `kill_shell`, `grep`, `glob`, `web_fetch`,
+  `web_search`, `sql_execute`, `notebook_actions`, …) plus every
+  client-MCP tool Cortex ships with its own schema (`task_*`, `team_*`,
+  `cron_*`, `skill`). Translator handles structured `tool_calls` *and*
+  qwen-style `<function=…>` text fallback; the result round-trip maps
+  Cortex's nested `tool_use.*` / `tool_result.*` shapes to OpenAI /
+  Anthropic message shapes. (Built-ins exercised live; MCP-style tools
+  follow the same translation path so they should round-trip the same
+  way — open an issue if a specific one misbehaves.)
 - **Hybrid mode** — set `sql_connection` and the `sql_execute` tool routes to
   a real Snowflake account (via Cortex's native `sqlConnectionName`), with a
   proxy-side safety net that pins `connection:` on every Snowflake-family
