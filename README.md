@@ -7,16 +7,14 @@
   <em>Snowflake Cortex Code CLI, fully local. Pluggable backends. Optional hybrid mode for real SQL.</em>
 </p>
 
-<!-- ───── Demo media (drop your files into assets/ and uncomment) ───────────
 <p align="center">
-  <img src="assets/demo.gif" alt="Local-Cortex demo" width="800"/>
+  <img src="assets/demo.gif" alt="Local-Cortex in action" width="820"/>
 </p>
 
 <p align="center">
-  <img src="assets/screenshot-tui.png"      alt="TUI in fully-local mode"   width="49%"/>
-  <img src="assets/screenshot-hybrid.png"   alt="Hybrid mode with real SQL" width="49%"/>
+  <img src="assets/llama-cpp-1.jpg" alt="Cortex Code driven by llama.cpp via Local-Cortex (1/2)" width="49%"/>
+  <img src="assets/llama-cpp-2.jpg" alt="Cortex Code driven by llama.cpp via Local-Cortex (2/2)" width="49%"/>
 </p>
-────────────────────────────────────────────────────────────────────────── -->
 
 Run Snowflake **Cortex Code CLI** against any LLM backend — local **Ollama**,
 **OpenAI** (or any OpenAI-compat provider — xAI/Groq/OpenRouter/llama.cpp/
